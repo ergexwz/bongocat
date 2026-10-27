@@ -1,0 +1,30 @@
+BongoCat 2.4.1 (local build)
+============================
+
+BongoCat
+--------
+Upstream: https://github.com/ayangweb/BongoCat
+Version: 2.4.1 local build based on upstream 2.4.0
+License: Apache License 2.0 (see LICENSE)
+
+Live2D Cubism Core
+------------------
+The application links the Live2D Cubism Core runtime and includes Live2D
+Cubism model assets. See:
+  licenses/Live2D-Cubism-Core-LICENSE.md
+  licenses/Live2D-Cubism-Core-NOTICE.md
+Distribution is subject to the Live2D Cubism Core license terms.
+
+Microsoft Visual C++ runtime
+----------------------------
+vcruntime140.dll and vcruntime140_1.dll are copied from the Microsoft Visual
+Studio Build Tools VC Redistributable (14.51.36231, x64) and are redistributed
+under the Microsoft Visual Studio license terms for application-local
+deployment.
+
+Other components
+----------------
+The application uses Rust crates and other third-party components; their
+versions and license metadata are recorded in the source tree at
+bongocat_final/source/Cargo.lock and bongocat_final/source/deny.toml in the
+repository.

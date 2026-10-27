@@ -63,7 +63,8 @@ cargo fmt --all -- --check
 
 ## 补丁
 
-源码修改已经包含在 `source/` 中；相对 upstream v2.4.0 的完整 diff 在：
+源码修改已经包含在 `source/` 中，workspace 版本为 **2.4.1**；相对
+upstream v2.4.0 的完整 diff 在：
 
 ```text
 bongocat-xinput.patch
