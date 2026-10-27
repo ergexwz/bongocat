@@ -1,6 +1,6 @@
-# BongoCat 2.4.0 — Xbox/XInput 后台手柄修复版
+# BongoCat 2.4.1 — Xbox/XInput 后台手柄修复版
 
-这是 BongoCat 2.4.0 的本地构建，修复了 Windows 上 Xbox 手柄在桌宠窗口不获得前台焦点时没有输入的问题，并修复了 Xbox HID 键盘报告导致 gamepad/standard 模型频繁自动切换的问题。
+这是基于 upstream BongoCat 2.4.0 的本地 2.4.1 构建，修复了 Windows 上 Xbox 手柄在桌宠窗口不获得前台焦点时没有输入的问题，并修复了 Xbox HID 键盘报告导致 gamepad/standard 模型频繁自动切换的问题。
 
 ## 直接运行
 
@@ -37,7 +37,7 @@ bongocat_final/
     build-provenance.json     原发布元数据
   bongocat-xinput.patch       相对 v2.4.0 的源码补丁
   BUILD.md                    从源码重新构建的步骤
-  source/                     修改后的完整 v2.4.0 源码（无 target/.git）
+  source/                     修改后的完整 v2.4.1 源码（基于 upstream 2.4.0，无 target/.git）
   THIRD_PARTY_NOTICES.md      第三方组件说明
 ```
 
