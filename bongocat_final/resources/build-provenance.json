@@ -1,0 +1,16 @@
+{
+  "build_environment": "production",
+  "cargo_lock_sha256": "bf535bdf1eb32bf3bf34ae2fb499328831560aa318c752854676e3b3d8c11778",
+  "features": "production",
+  "profile": "release",
+  "rust_toolchain": {
+    "binary": "rustc",
+    "commit_date": "2026-07-14",
+    "commit_hash": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+    "host": "x86_64-pc-windows-msvc",
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "schema_version": 1,
+  "source_commit": "b82b4750b776df1408db07d5858d37db1594c3f3",
+  "target": "x86_64-pc-windows-msvc"
+}
