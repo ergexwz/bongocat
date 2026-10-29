@@ -48,7 +48,9 @@ pub use theme::{
 };
 
 mod system_menu;
-pub use system_menu::{SystemMenuAction, SystemMenuError, SystemMenuPresentation};
+pub use system_menu::{
+    SystemMenuAction, SystemMenuError, SystemMenuPluginItem, SystemMenuPresentation,
+};
 mod system_menu_native;
 pub use system_menu_native::SystemMenu;
 
@@ -107,6 +109,13 @@ pub fn pick_model_folder(
     on_complete: impl FnOnce(Result<ModelSourcePickerOutcome, ModelSourcePickerError>) + Send + 'static,
 ) -> Result<(), ModelSourcePickerError> {
     model_source_picker::pick_model_folder(on_complete)
+}
+
+/// Let the user choose a plugin package ZIP for an explicit local install.
+pub fn pick_plugin_package(
+    on_complete: impl FnOnce(Option<std::path::PathBuf>) + Send + 'static,
+) -> Result<(), ModelSourcePickerError> {
+    model_source_picker::pick_plugin_package(on_complete)
 }
 
 /// Revalidate and canonicalize a model folder supplied by a non-dialog source.

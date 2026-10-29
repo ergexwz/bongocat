@@ -5,7 +5,10 @@
 
 use super::*;
 
-pub(crate) fn system_menu_presentation(snapshot: &SettingsSnapshot) -> SystemMenuPresentation {
+pub(crate) fn system_menu_presentation(
+    snapshot: &SettingsSnapshot,
+    plugin_items: &[bongocat_plugin_service::CompanionMenuItem],
+) -> SystemMenuPresentation {
     // `catalog_locale` is the protocol's own answer to "which catalog does this
     // resolved language read from". Restating that mapping here is what left the
     // tray menu in English for every language other than Chinese.
@@ -26,6 +29,16 @@ pub(crate) fn system_menu_presentation(snapshot: &SettingsSnapshot) -> SystemMen
         click_through_enabled: snapshot.overlay.click_through,
         always_on_top_enabled: snapshot.overlay.always_on_top,
         hide_on_pointer_hover_enabled: snapshot.overlay.hide_on_pointer_hover,
+        plugins_menu: text("system_menu.plugins"),
+        plugins_empty: text("system_menu.plugins_empty"),
+        plugin_items: plugin_items
+            .iter()
+            .map(|item| bongocat_platform::SystemMenuPluginItem {
+                plugin: item.plugin.clone(),
+                action: item.action.clone(),
+                label: item.label.clone(),
+            })
+            .collect(),
         // A Production build stays gated on its channel and release signing key
         // (`bongocat_app::update_check_available`): without them a check can only fail.
         // A Development build can never update either, but the update window is where
@@ -47,7 +60,13 @@ pub(crate) async fn refresh_system_menu_presentation(
         .read_snapshot()
         .await
         .map_err(|error| error.to_string())?;
-    let presentation = system_menu_presentation(&snapshot);
+    let plugin_items = cx.update(|cx| {
+        cx.try_global::<ProductCoordinator>()
+            .and_then(|coordinator| coordinator.plugin_service.as_ref())
+            .map(bongocat_plugin_service::PluginService::menu_items)
+            .unwrap_or_default()
+    });
+    let presentation = system_menu_presentation(&snapshot, &plugin_items);
     cx.update(|cx| {
         if !cx.has_global::<ProductCoordinator>() {
             return Err("system menu owner is unavailable".to_owned());

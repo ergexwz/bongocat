@@ -26,7 +26,10 @@ pub use command::{
     PluginCard, PluginCenterSnapshot, PluginCommand, PluginCommandError, PluginInteractionFailure,
     PluginReply, PluginServiceClient, PluginServiceClosed, PluginServiceEndpoint,
 };
-pub use service::{PluginOverlayHandles, PluginService, PluginServiceStartError, plugin_directory};
+pub use service::{
+    CompanionMenuItem, PetBoundsReporter, PluginOverlayHandles, PluginService,
+    PluginServiceStartError, QueuedPluginBubble, plugin_directory,
+};
 
 /// How often the service looks for work.
 ///
@@ -60,4 +63,4 @@ pub trait PluginInputEvents: Send {
     fn drain(&mut self) -> (Vec<bongocat_plugin_sdk::PluginInputEvent>, u64);
 }
 
-pub use bongocat_plugin_sdk::{InputEventControl, PluginInputEvent};
+pub use bongocat_plugin_sdk::{InputEventControl, PetBounds, PluginInputEvent};

@@ -3,6 +3,14 @@
 /// The platform owns native menu handles only. The application supplies this
 /// value from its settings snapshot so platform code never becomes a second
 /// source of configuration or localization state.
+/// One plugin-owned entry shown in the host's plugin submenu.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SystemMenuPluginItem {
+    pub plugin: String,
+    pub action: String,
+    pub label: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SystemMenuPresentation {
     pub title: String,
@@ -23,6 +31,12 @@ pub struct SystemMenuPresentation {
     pub always_on_top_enabled: bool,
     pub hide_on_pointer_hover_enabled: bool,
     pub update_check_available: bool,
+    /// Label of the submenu that groups companion-plugin entries.
+    pub plugins_menu: String,
+    /// Disabled row shown while no companion plugin is running.
+    pub plugins_empty: String,
+    /// Running companion plugins' menu entries, in publication order.
+    pub plugin_items: Vec<SystemMenuPluginItem>,
 }
 
 /// A product action emitted by either native menu surface.
@@ -30,7 +44,7 @@ pub struct SystemMenuPresentation {
 /// Actions are deliberately small and stable: the tray and model-window
 /// context surfaces share the same menu set, while the application remains
 /// the only owner of what each action means.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SystemMenuAction {
     OpenSettings,
     /// Toggle the session-only model-window visibility. Native menus render
@@ -40,6 +54,11 @@ pub enum SystemMenuAction {
     ToggleAlwaysOnTop,
     ToggleHideOnPointerHover,
     CheckForUpdates,
+    /// A menu entry owned by a companion plugin.
+    Plugin {
+        plugin: String,
+        action: String,
+    },
     Quit,
 }
 

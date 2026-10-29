@@ -20,6 +20,12 @@ use zip::ZipArchive;
 
 /// The most one package may expand to, unpacked.
 pub const MAX_EXTRACT_BYTES: usize = 64 * 1024 * 1024;
+/// The most a package chosen explicitly by the user may occupy, compressed.
+///
+/// A local Tauri package carries its WebView frontend and can be larger than a
+/// remote catalog download. The user picked the file and confirmed it, so the
+/// bound is the extraction budget rather than the remote transport budget.
+pub const MAX_LOCAL_INSTALL_BYTES: usize = 64 * 1024 * 1024;
 /// The most files one package may contain.
 pub const MAX_ARCHIVE_ENTRIES: usize = 4096;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -35,8 +41,15 @@ pub struct InstalledPackage {
 
 /// Read bounded metadata without executing or extracting package code.
 pub fn inspect_package(bytes: &[u8]) -> Result<PluginManifest, PluginManagerError> {
+    inspect_package_with_limit(bytes, crate::catalog::MAX_DOWNLOAD_BYTES)
+}
+
+pub fn inspect_package_with_limit(
+    bytes: &[u8],
+    limit: usize,
+) -> Result<PluginManifest, PluginManagerError> {
     use std::io::Read;
-    if bytes.len() > crate::catalog::MAX_DOWNLOAD_BYTES {
+    if bytes.len() > limit {
         return Err(PluginManagerError::UnsafeManifest(
             "package exceeds download limit".into(),
         ));
@@ -65,7 +78,21 @@ pub fn install_package(
     expected_sha256: &str,
     bytes: &[u8],
 ) -> Result<InstalledPackage, PluginManagerError> {
-    inspect_package(bytes)?;
+    install_package_with_limit(
+        root,
+        expected_sha256,
+        bytes,
+        crate::catalog::MAX_DOWNLOAD_BYTES,
+    )
+}
+
+pub fn install_package_with_limit(
+    root: &Path,
+    expected_sha256: &str,
+    bytes: &[u8],
+    limit: usize,
+) -> Result<InstalledPackage, PluginManagerError> {
+    inspect_package_with_limit(bytes, limit)?;
     if sha256_of(bytes) != expected_sha256.to_ascii_lowercase() {
         return Err(PluginManagerError::UnsafeManifest(
             "package digest does not match the catalog".into(),

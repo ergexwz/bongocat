@@ -36,7 +36,9 @@
   "system_menu": {
     "title": "BongoCat",
     "open_settings": "設定",
-    "quit": "結束 BongoCat"
+    "quit": "結束 BongoCat",
+    "plugins": "外掛程式",
+    "plugins_empty": "目前沒有執行中的伴隨外掛程式"
   },
   "application_menu": {
     "file": "檔案",
@@ -573,6 +575,18 @@
     "update_all": "更新全部",
     "update_available": "可更新",
     "update_all_success": "所有外掛程式均已更新。",
+    "install_local": "從檔案安裝…",
+    "install_local_title": "安裝本機外掛程式",
+    "install_local_warning": "外掛程式是本機可執行碼，會以你的權限執行。只安裝你信任的 ZIP。",
+    "install_local_confirm": "安裝",
+    "install_local_cancel": "取消",
+    "install_local_success": "外掛程式已安裝。",
+    "install_local_invalid": "這不是有效的外掛程式包。",
+    "install_local_too_large": "外掛程式包過大。",
+    "install_local_incompatible": "此外掛程式不支援目前的 BongoCat 版本。",
+    "install_local_version_exists": "此外掛程式版本已安裝。請建置更新的版本，或先解除安裝舊版本。",
+    "bubble_more": "還有 %{count} 則通知",
+    "bubble_close": "關閉",
     "available_version": "可用版本 %{version}",
     "uninstall": "卸載",
     "uninstall_confirm": "確定要卸載「%{name}」嗎？",
@@ -584,6 +598,7 @@
     "version": "版本 %{version}",
     "errors": {
       "install_failed": "外掛安裝失敗：%{name}",
+      "install_local_failed": "本機外掛程式安裝失敗。",
       "update_failed": "外掛更新失敗：%{name}",
       "enable_failed": "外掛啟用失敗：%{name}",
       "disable_failed": "外掛停用失敗：%{name}",

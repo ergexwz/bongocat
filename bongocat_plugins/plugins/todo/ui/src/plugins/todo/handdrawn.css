@@ -1,0 +1,50 @@
+/**
+ * Todo 面板手绘视觉样式（T2）。
+ *
+ * - @font-face：851 手写杂字体，从 public/fonts 加载，vite 不内联（28MB），font-display:swap 不阻塞首屏。
+ * - CSS 变量：粉墨水系色板（CONTEXT.md「设计探索决策」）。todo 面板根元素挂 class 即继承。
+ *
+ * 注意：本面板无暗色模式（设计稿 panel.html 只有亮色态）。不跟随系统暗色。
+ *
+ * @see docs/designs/todo-panel-exploration/panel.html 视觉事实来源
+ */
+
+/* todo 窗口透明：html/body/#app 全透明，只留 SVG 纸张本身可见（纸张外直接透出桌面）。
+   必须 !important 覆盖 uno preflight / antdv reset 可能设的背景。 */
+html,
+body,
+#app {
+  background: transparent !important;
+}
+
+@font-face {
+  font-family: 'Handwriting851';
+  /* vite public 资源：开发期绝对路径 /fonts/...，生产构建同路径，不做 hash（public 原样拷贝）*/
+  src: url('/fonts/jingnan-pop-black.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── 粉墨水系色板（设计稿唯一的亮色态）── */
+.todo-handdrawn {
+  --paper: #ffffff;
+  --paper-shadow: #f0e8de;
+  --ink: #4a3a2e;
+  --ink-soft: #8a7560;
+  --ink-faint: #c4b5a0;
+  --pink: #f4a8a0;
+  --pink-deep: #e88880;
+  --orange: #f5c26b;
+  --blue: #9bc4e0;
+  --red-ink: #d4654a;
+
+  /* 窗口透明（transparent:true），纸张外直接透出桌面，无纯色边 */
+  background: transparent;
+  color: var(--ink);
+  font-family:
+    'Handwriting851',
+    -apple-system,
+    'PingFang SC',
+    sans-serif;
+}

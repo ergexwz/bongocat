@@ -190,6 +190,18 @@ impl ProductOverlaySession {
         }
     }
 
+    pub fn scale_factor(&self) -> f32 {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.scale_factor()
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            self.inner.scale_factor()
+        }
+    }
+
     pub fn is_visible(&self) -> bool {
         self.inner.is_visible()
     }

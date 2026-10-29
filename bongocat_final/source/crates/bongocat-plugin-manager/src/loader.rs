@@ -20,12 +20,25 @@ pub(crate) struct Process {
     sequence: u64,
     icon_text: bool,
     push_output: bool,
+    companion_menu: bool,
+    host_bubble: bool,
 }
 impl Process {
     pub(crate) fn start(root: &Path, metadata: &PluginMetadata) -> io::Result<Self> {
+        // The package tree is `<plugin_dir>/packages/<id>/<version>`, so the
+        // plugin-owned data directory is its fourth ancestor plus `data/<id>`.
+        // Creating it here keeps the path contract in one place instead of
+        // making every plugin reverse-engineer the store layout.
+        let data_dir = root
+            .ancestors()
+            .nth(3)
+            .map(|plugin_dir| plugin_dir.join(crate::DATA_DIRECTORY).join(&metadata.id))
+            .unwrap_or_else(|| root.join("data"));
+        std::fs::create_dir_all(&data_dir)?;
         let mut command = Command::new(entry_path(root, &metadata.entry));
         command
             .current_dir(root)
+            .env("BONGOCAT_PLUGIN_DATA_DIR", &data_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -69,6 +82,8 @@ impl Process {
             sequence: 0,
             push_output: push,
             icon_text: metadata.capabilities.contains(&Capability::IconTextV1),
+            companion_menu: metadata.capabilities.contains(&Capability::CompanionV1),
+            host_bubble: metadata.capabilities.contains(&Capability::HostBubbleV1),
         };
         process.exchange(HostMessage::Handshake {
             protocol_version: PROTOCOL_VERSION,
@@ -133,6 +148,18 @@ impl Process {
         if !output.validate() {
             return Err(io::Error::other("plugin output exceeds limits"));
         }
+        self.validate_capabilities(&output)?;
+        Ok(output)
+    }
+    fn validate_update(&self, response: Response) -> io::Result<PluginOutput> {
+        let output = response.result.map_err(io::Error::other)?;
+        if response.sequence != 0 || !output.validate() {
+            return Err(io::Error::other("invalid plugin update"));
+        }
+        self.validate_capabilities(&output)?;
+        Ok(output)
+    }
+    fn validate_capabilities(&self, output: &PluginOutput) -> io::Result<()> {
         if !self.icon_text
             && output
                 .model
@@ -145,24 +172,15 @@ impl Process {
                 "plugin published undeclared icon_text_v1 nodes",
             ));
         }
-        Ok(output)
-    }
-    fn validate_update(&self, response: Response) -> io::Result<PluginOutput> {
-        let output = response.result.map_err(io::Error::other)?;
-        if response.sequence != 0 || !output.validate() {
-            return Err(io::Error::other("invalid plugin update"));
+        if !self.companion_menu && !output.menu.is_empty() {
+            return Err(io::Error::other(
+                "plugin published undeclared companion menu entries",
+            ));
         }
-        if !self.icon_text
-            && output
-                .model
-                .nodes
-                .iter()
-                .chain(&output.settings.nodes)
-                .any(|node| matches!(node, UiNode::IconText { .. }))
-        {
-            return Err(io::Error::other("undeclared icon_text_v1"));
+        if !self.host_bubble && !output.bubbles.is_empty() {
+            return Err(io::Error::other("plugin published undeclared host bubbles"));
         }
-        Ok(output)
+        Ok(())
     }
     pub(crate) fn update(&mut self) -> io::Result<Option<PluginOutput>> {
         let mut latest = None;

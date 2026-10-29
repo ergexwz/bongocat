@@ -36,7 +36,9 @@
   "system_menu": {
     "title": "BongoCat",
     "open_settings": "Cài đặt",
-    "quit": "Thoát BongoCat"
+    "quit": "Thoát BongoCat",
+    "plugins": "Plugins",
+    "plugins_empty": "No companion plugins are running"
   },
   "application_menu": {
     "file": "Tệp",
@@ -573,6 +575,18 @@
     "update_all": "Cập nhật tất cả",
     "update_available": "Có bản cập nhật",
     "update_all_success": "Tất cả plugin đã được cập nhật.",
+    "install_local": "Install from file…",
+    "install_local_title": "Install local plugin",
+    "install_local_warning": "Plugins are native executable code and run with your permissions. Only install a ZIP you trust.",
+    "install_local_confirm": "Install",
+    "install_local_cancel": "Cancel",
+    "install_local_success": "Plugin installed.",
+    "install_local_invalid": "This file is not a valid plugin package.",
+    "install_local_too_large": "This plugin package is too large.",
+    "install_local_incompatible": "This plugin does not support this BongoCat version.",
+    "install_local_version_exists": "This plugin version is already installed. Build a newer version or uninstall the old one first.",
+    "bubble_more": "%{count} more notifications",
+    "bubble_close": "Close",
     "available_version": "Phiên bản có sẵn %{version}",
     "uninstall": "Gỡ cài đặt",
     "uninstall_confirm": "Bạn có chắc muốn gỡ cài đặt %{name} không?",
@@ -584,6 +598,7 @@
     "version": "Phiên bản %{version}",
     "errors": {
       "install_failed": "Cài đặt plugin thất bại: %{name}",
+      "install_local_failed": "Could not install the local plugin package.",
       "update_failed": "Cập nhật plugin thất bại: %{name}",
       "enable_failed": "Không thể bật plugin: %{name}",
       "disable_failed": "Không thể tắt plugin: %{name}",

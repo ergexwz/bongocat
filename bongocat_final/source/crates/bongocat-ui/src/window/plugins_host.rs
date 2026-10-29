@@ -39,6 +39,7 @@ pub(crate) enum PluginPackageOperation {
 pub(crate) enum PluginInFlight {
     Refresh,
     UpdateAll,
+    LocalInstall,
     Package {
         plugin: String,
         operation: PluginPackageOperation,
@@ -136,10 +137,15 @@ impl PluginHubState {
 
     pub(crate) fn package_busy(&self) -> bool {
         self.cards.iter().any(|card| card.installing)
+            || self.in_flight.contains_key(&PluginInFlight::LocalInstall)
             || self
                 .in_flight
                 .keys()
                 .any(|command| matches!(command, PluginInFlight::Package { .. }))
+    }
+
+    pub(crate) fn local_install_pending(&self) -> bool {
+        self.in_flight.contains_key(&PluginInFlight::LocalInstall)
     }
 
     pub(crate) fn can_update_all(&self) -> bool {
@@ -200,6 +206,7 @@ pub(crate) enum PluginFailure {
         plugin: String,
         update: bool,
     },
+    InstallLocal,
     Enable {
         plugin: String,
         enabled: bool,
@@ -235,9 +242,11 @@ impl PluginFailure {
             | Self::Action { plugin, .. }
             | Self::Configure { plugin, .. }
             | Self::Preview { plugin, .. } => Some(plugin),
-            Self::Refresh | Self::Load { .. } | Self::Reported { .. } | Self::UpdateAll { .. } => {
-                None
-            }
+            Self::Refresh
+            | Self::Load { .. }
+            | Self::Reported { .. }
+            | Self::UpdateAll { .. }
+            | Self::InstallLocal => None,
         }
     }
 }
@@ -645,7 +654,7 @@ impl PluginHost {
             .swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 
-    fn finish(&self, command: &PluginInFlight) {
+    pub(crate) fn finish(&self, command: &PluginInFlight) {
         let mut published = self
             .published
             .lock()
@@ -751,6 +760,19 @@ impl PluginHost {
                 Ok(snapshot)
             },
         )
+    }
+
+    pub(crate) fn install_local(&self, bytes: Vec<u8>) -> bool {
+        self.apply_concurrent_command(
+            PluginInFlight::LocalInstall,
+            PluginFailure::InstallLocal,
+            |client| client.install_local_blocking(bytes),
+        )
+    }
+
+    pub(crate) fn fail_local_install(&self) {
+        self.finish(&PluginInFlight::LocalInstall);
+        self.record_failure(PluginFailure::InstallLocal, PluginCommandError::Operation);
     }
 
     pub(crate) fn set_enabled(&self, id: &str, enabled: bool) {

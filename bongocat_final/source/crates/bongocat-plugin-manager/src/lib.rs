@@ -78,12 +78,34 @@ impl PluginManager {
         bytes: &[u8],
         expected_sha256: &str,
     ) -> Result<install::InstalledPackage, PluginManagerError> {
+        self.install_verified_with_limit(bytes, expected_sha256, crate::catalog::MAX_DOWNLOAD_BYTES)
+    }
+
+    /// Install a package the user selected from disk.
+    ///
+    /// There is no catalog digest or signature behind this path; the user
+    /// confirmed the file. It still goes through the same manifest, path,
+    /// extraction and version checks as a catalog package.
+    pub fn install_local(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<install::InstalledPackage, PluginManagerError> {
+        let digest = sha256_of(bytes);
+        self.install_verified_with_limit(bytes, &digest, install::MAX_LOCAL_INSTALL_BYTES)
+    }
+
+    fn install_verified_with_limit(
+        &mut self,
+        bytes: &[u8],
+        expected_sha256: &str,
+        limit: usize,
+    ) -> Result<install::InstalledPackage, PluginManagerError> {
         if sha256_of(bytes) != expected_sha256.to_ascii_lowercase() {
             return Err(PluginManagerError::UnsafeManifest(
                 "package digest does not match the catalog".into(),
             ));
         }
-        let manifest = install::inspect_package(bytes)?;
+        let manifest = install::inspect_package_with_limit(bytes, limit)?;
         let id = &manifest.metadata.id;
         if !supports_application(&manifest.metadata) {
             return Err(PluginManagerError::UnsafeManifest(
@@ -100,7 +122,8 @@ impl PluginManager {
         if running {
             self.registry.suspend(id)?;
         }
-        let result = install::install_package(&self.plugin_dir, expected_sha256, bytes);
+        let result =
+            install::install_package_with_limit(&self.plugin_dir, expected_sha256, bytes, limit);
         let installed = match result {
             Ok(installed) => installed,
             Err(error) => {
@@ -151,6 +174,9 @@ impl PluginManager {
         activity: bongocat_plugin_sdk::InputActivity,
     ) {
         self.registry.input_activity(elapsed_ms, activity);
+    }
+    pub fn pet_bounds(&mut self, bounds: bongocat_plugin_sdk::PetBounds) {
+        self.registry.pet_bounds(bounds);
     }
     /// Establish the cumulative input baseline for a plugin that just started.
     pub fn initialize_input_activity(
@@ -222,6 +248,19 @@ impl PluginManager {
             root.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
         })
+    }
+    /// The icon an installed package carries, for plugins that are not in the
+    /// current catalog (notably local ZIP installs).
+    pub fn installed_icon_url(&self, id: &str) -> Option<String> {
+        let root = install::selected_root(&self.plugin_dir, id)?;
+        let manifest = install::read_manifest(&root.join(MANIFEST_FILE)).ok()?;
+        match manifest.metadata.icon {
+            bongocat_plugin_sdk::PluginIcon::LocalImage(value) => {
+                Some(root.join(value).to_string_lossy().into_owned())
+            }
+            bongocat_plugin_sdk::PluginIcon::RemoteImage(url) => Some(url),
+            bongocat_plugin_sdk::PluginIcon::Emoji(_) => None,
+        }
     }
     pub fn discover_plugins(&mut self) -> Result<usize, PluginManagerError> {
         let mut count = 0;

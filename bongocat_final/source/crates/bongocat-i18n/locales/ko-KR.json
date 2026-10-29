@@ -36,7 +36,9 @@
   "system_menu": {
     "title": "BongoCat",
     "open_settings": "설정",
-    "quit": "BongoCat 종료"
+    "quit": "BongoCat 종료",
+    "plugins": "Plugins",
+    "plugins_empty": "No companion plugins are running"
   },
   "application_menu": {
     "file": "파일",
@@ -573,6 +575,18 @@
     "update_all": "모두 업데이트",
     "update_available": "업데이트 가능",
     "update_all_success": "모든 플러그인이 최신 상태입니다.",
+    "install_local": "Install from file…",
+    "install_local_title": "Install local plugin",
+    "install_local_warning": "Plugins are native executable code and run with your permissions. Only install a ZIP you trust.",
+    "install_local_confirm": "Install",
+    "install_local_cancel": "Cancel",
+    "install_local_success": "Plugin installed.",
+    "install_local_invalid": "This file is not a valid plugin package.",
+    "install_local_too_large": "This plugin package is too large.",
+    "install_local_incompatible": "This plugin does not support this BongoCat version.",
+    "install_local_version_exists": "This plugin version is already installed. Build a newer version or uninstall the old one first.",
+    "bubble_more": "%{count} more notifications",
+    "bubble_close": "Close",
     "available_version": "사용 가능한 버전 %{version}",
     "uninstall": "제거",
     "uninstall_confirm": "%{name} 플러그인을 제거하시겠습니까?",
@@ -584,6 +598,7 @@
     "version": "버전 %{version}",
     "errors": {
       "install_failed": "플러그인 설치 실패: %{name}",
+      "install_local_failed": "Could not install the local plugin package.",
       "update_failed": "플러그인 업데이트 실패: %{name}",
       "enable_failed": "플러그인을 활성화할 수 없습니다: %{name}",
       "disable_failed": "플러그인을 비활성화할 수 없습니다: %{name}",

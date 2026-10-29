@@ -1,0 +1,25 @@
+{
+  "metadata": {
+    "id": "com.bongocat.todo",
+    "name": "Todo",
+    "description": "A hand-drawn todo panel, quick add window and due-time bubbles beside your pet.",
+    "version": "0.1.0",
+    "app_versions": ">=2.5.0",
+    "protocol_version": 1,
+    "entry": "bongocat-todo",
+    "icon": {
+      "type": "local_image",
+      "value": "resources/icon.png"
+    },
+    "capabilities": [
+      "companion_v1",
+      "localized_views_v1"
+    ],
+    "localizations": {
+      "zh-CN": {
+        "name": "待办",
+        "description": "桌宠旁边的待办面板、快速新建和到期气泡。"
+      }
+    }
+  }
+}

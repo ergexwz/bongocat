@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BongoCat Mail",
+  "version": "0.1.0",
+  "identifier": "com.bongocat.mail",
+  "build": {
+    "frontendDist": "ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "runtime",
+        "title": "BongoCat Mail",
+        "url": "index.html?view=runtime",
+        "visible": false,
+        "width": 1,
+        "height": 1,
+        "decorations": false,
+        "transparent": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
+        "label": "mail-list",
+        "title": "Mail",
+        "url": "index.html?view=mail-list",
+        "visible": false,
+        "width": 400,
+        "height": 560,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
+        "label": "mail-archive",
+        "title": "Archive",
+        "url": "index.html?view=mail-archive",
+        "visible": false,
+        "width": 400,
+        "height": 560,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
+        "label": "mail-settings",
+        "title": "Mail Settings",
+        "url": "index.html?view=mail-settings",
+        "visible": false,
+        "width": 720,
+        "height": 720,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
+        "label": "bubble",
+        "title": "Mail",
+        "url": "index.html?view=bubble",
+        "visible": false,
+        "width": 380,
+        "height": 140,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.ico"
+    ]
+  }
+}

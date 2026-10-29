@@ -53,9 +53,15 @@ fn main() {
             format!("VERSION_MINOR={version_minor}"),
             format!("VERSION_PATCH={version_patch}"),
         ];
-        embed_resource::compile(WINDOWS_RESOURCE_FILE, version_parameters)
-            .manifest_required()
-            .unwrap_or_else(|error| panic!("Windows product resource compilation failed: {error}"));
+        embed_resource::compile(
+            WINDOWS_RESOURCE_FILE,
+            embed_resource::ParamsMacrosAndIncludeDirs(
+                version_parameters.iter(),
+                [manifest_dir.clone()],
+            ),
+        )
+        .manifest_required()
+        .unwrap_or_else(|error| panic!("Windows product resource compilation failed: {error}"));
     }
 }
 

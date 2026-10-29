@@ -163,6 +163,14 @@ pub enum PluginCommand {
         id: String,
         reply: PluginReply<Result<PluginCenterSnapshot, PluginCommandError>>,
     },
+    /// Install a package the user selected from disk.
+    ///
+    /// The user confirmed the trust boundary in the window; the service still
+    /// validates the archive, manifest, version and application range.
+    InstallLocal {
+        bytes: Vec<u8>,
+        reply: PluginReply<Result<PluginCenterSnapshot, PluginCommandError>>,
+    },
     /// Remove a plugin's executable package. Its data is kept.
     Uninstall {
         id: String,
@@ -278,6 +286,21 @@ impl PluginServiceClient {
             id: id.to_owned(),
             reply,
         })
+    }
+
+    pub async fn install_local(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<PluginCenterSnapshot, PluginCommandError> {
+        self.request(|reply| PluginCommand::InstallLocal { bytes, reply })
+            .await
+    }
+
+    pub fn install_local_blocking(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<PluginCenterSnapshot, PluginCommandError> {
+        self.request_blocking(|reply| PluginCommand::InstallLocal { bytes, reply })
     }
 
     pub async fn uninstall(&self, id: &str) -> Result<PluginCenterSnapshot, PluginCommandError> {
