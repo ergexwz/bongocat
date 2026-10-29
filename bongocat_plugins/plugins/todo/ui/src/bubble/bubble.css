@@ -1,0 +1,52 @@
+/**
+ * 桌宠气泡窗口手绘视觉样式（T2）。
+ *
+ * 与 todo 面板的 handdrawn.css 同源（同一份设计 token + 851 字体 + 窗口透明），
+ * 但气泡是独立伴随窗口（WINDOW_LABEL.BUBBLE），不继承 todo 页面样式，故独立一份。
+ * 粉墨水系色板 + Handwriting851 字体 + font-weight 600 基线（设计稿 bubble.html）。
+ *
+ * 无暗色模式（设计稿只有亮色态，见 CONTEXT.md 已踩坑清单）。
+ *
+ * @see docs/designs/phase2-exploration/bubble.html 视觉事实来源
+ * @see src/plugins/todo/styles/handdrawn.css 同源 token 定义
+ */
+
+/* 气泡窗口透明（transparent:true）：纸张外直接透出桌面。!important 覆盖 uno preflight。 */
+html,
+body,
+#app {
+  background: transparent !important;
+}
+
+@font-face {
+  font-family: 'Handwriting851';
+  /* vite public 资源：与 todo 面板共用同一份字体文件 */
+  src: url('/fonts/jingnan-pop-black.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── 粉墨水系色板（与 todo 面板 token 完全一致）── */
+.bubble-handdrawn {
+  --paper: #ffffff;
+  --paper-shadow: #f0e8de;
+  --ink: #4a3a2e;
+  --ink-soft: #8a7560;
+  --ink-faint: #c4b5a0;
+  --pink: #f4a8a0;
+  --pink-deep: #e88880;
+  --orange: #f5c26b;
+  --blue: #9bc4e0;
+  --red-ink: #d4654a;
+
+  /* 851 字体默认 normal 太细，基线提到 600；主次用颜色弱化而非字重 */
+  background: transparent;
+  color: var(--ink);
+  font-family:
+    'Handwriting851',
+    -apple-system,
+    'PingFang SC',
+    sans-serif;
+  font-weight: 600;
+}

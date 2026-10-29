@@ -19,6 +19,11 @@
 
 ## 构建
 
+本仓库的 `source/Cargo.toml` 把 `bongocat-plugin-sdk` 指向同级的
+`bongocat_plugins/crates/bongocat-plugin-sdk`（相对路径
+`../../bongocat_plugins/...`）。构建前必须保留这个目录；它包含待办/邮件插件所需的
+companion menu、桌宠坐标和本地安装协议扩展。
+
 ```powershell
 cd bongocat_final\source
 
@@ -28,6 +33,9 @@ $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "4"
 
 cargo build --release -p bongocat-app --features production
 ```
+
+插件本身在 `bongocat_plugins/` 独立构建，构建方法见该目录的 `README.md`。
+宿主只安装运行时产生的 ZIP，不把插件源码或插件包放进 `version/BongoCat_2.5.0/`。
 
 产物：
 
@@ -63,8 +71,8 @@ cargo fmt --all -- --check
 
 ## 补丁
 
-源码修改已经包含在 `source/` 中，workspace 版本为 **2.4.1**；相对
-upstream v2.4.0 的完整 diff 在：
+源码修改已经包含在 `source/` 中，workspace 版本为 **2.5.0**；2.4.1 时期相对
+upstream v2.4.0 的 Xbox/XInput 补丁保留在：
 
 ```text
 bongocat-xinput.patch

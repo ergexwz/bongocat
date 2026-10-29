@@ -19,18 +19,57 @@ use bongocat_plugin_hud::{
 use bongocat_plugin_manager::{
     AvailablePlugin, PluginManager, PluginManagerError, PluginSource, PluginState, RegistryError,
 };
-use bongocat_plugin_sdk::{ConfigValue, InputActivity, PluginOutput, UiNode};
+use bongocat_plugin_sdk::{
+    ConfigValue, InputActivity, PetBounds, PluginBubble, PluginOutput, UiNode,
+};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+
+/// One plugin-owned entry in the host's companion menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompanionMenuItem {
+    pub plugin: String,
+    pub action: String,
+    pub label: String,
+}
+
+/// One bubble waiting for the host's shared notification window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedPluginBubble {
+    pub plugin: String,
+    pub bubble: PluginBubble,
+}
+
+/// A cheap, cloneable writer for the model window's logical rectangle.
+#[derive(Clone, Default)]
+pub struct PetBoundsReporter {
+    slot: Arc<RwLock<Option<PetBounds>>>,
+}
+
+impl PetBoundsReporter {
+    pub fn set(&self, bounds: PetBounds) {
+        *self
+            .slot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bounds);
+    }
+
+    pub fn get(&self) -> Option<PetBounds> {
+        *self
+            .slot
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
 
 /// The store root a build's plugins are installed under.
 ///
@@ -62,6 +101,9 @@ pub struct PluginService {
     client: PluginServiceClient,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<(), PluginManagerError>>>,
+    menu_items: Arc<RwLock<Vec<CompanionMenuItem>>>,
+    bubbles: Arc<Mutex<Vec<QueuedPluginBubble>>>,
+    pet_bounds: Arc<RwLock<Option<PetBounds>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -122,7 +164,13 @@ impl PluginService {
         let (viewport_reporter, viewport) = latest_viewport_channel();
         let (interaction_sender, interactions) = sync_channel(64);
         let stop = Arc::new(AtomicBool::new(false));
+        let menu_items = Arc::new(RwLock::new(Vec::new()));
+        let bubbles = Arc::new(Mutex::new(Vec::new()));
+        let pet_bounds = Arc::new(RwLock::new(None));
         let worker_stop = Arc::clone(&stop);
+        let worker_menu = Arc::clone(&menu_items);
+        let worker_bubbles = Arc::clone(&bubbles);
+        let worker_pet_bounds = Arc::clone(&pet_bounds);
         let worker = thread::Builder::new()
             .name("bongocat-plugin-service".to_owned())
             .spawn(move || {
@@ -138,6 +186,11 @@ impl PluginService {
                     source,
                     input_activity,
                     events,
+                    CompanionSinks {
+                        menu_items: worker_menu,
+                        bubbles: worker_bubbles,
+                        pet_bounds: worker_pet_bounds,
+                    },
                 )
             })
             .map_err(PluginServiceStartError::Spawn)?;
@@ -146,6 +199,9 @@ impl PluginService {
                 client,
                 stop,
                 worker: Some(worker),
+                menu_items,
+                bubbles,
+                pet_bounds,
             },
             PluginOverlayHandles {
                 hud_consumer,
@@ -158,6 +214,39 @@ impl PluginService {
     /// The window end of the command channel.
     pub fn client(&self) -> PluginServiceClient {
         self.client.clone()
+    }
+
+    /// The companion menu entries published by currently running plugins.
+    pub fn menu_items(&self) -> Vec<CompanionMenuItem> {
+        self.menu_items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Take the bubbles that arrived since the host last drained the queue.
+    pub fn drain_bubbles(&self) -> Vec<QueuedPluginBubble> {
+        std::mem::take(
+            &mut *self
+                .bubbles
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Drop queued bubbles owned by a plugin that is no longer running.
+    pub fn clear_bubbles(&self, plugin: &str) {
+        self.bubbles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|queued| queued.plugin != plugin);
+    }
+
+    /// The writer the product frame loop uses to publish the pet rectangle.
+    pub fn pet_bounds_reporter(&self) -> PetBoundsReporter {
+        PetBoundsReporter {
+            slot: Arc::clone(&self.pet_bounds),
+        }
     }
 
     /// Ask the worker to stop and wait for it to have stopped.
@@ -193,6 +282,12 @@ struct OverlaySinks {
     interactions: Receiver<HudInteraction>,
 }
 
+struct CompanionSinks {
+    menu_items: Arc<RwLock<Vec<CompanionMenuItem>>>,
+    bubbles: Arc<Mutex<Vec<QueuedPluginBubble>>>,
+    pet_bounds: Arc<RwLock<Option<PetBounds>>>,
+}
+
 /// The worker's whole state.
 struct Worker {
     manager: PluginManager,
@@ -222,6 +317,9 @@ struct Worker {
     started: Instant,
     last_tick: Duration,
     shutdown_reply: Option<PluginReply<()>>,
+    companion: CompanionSinks,
+    last_pet_bounds: Option<PetBounds>,
+    seen_bubbles: BTreeMap<String, BTreeSet<String>>,
 }
 
 struct CatalogJob {
@@ -263,6 +361,7 @@ struct LayerSignature {
     frames: Vec<PluginHudFrame>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     directory: PathBuf,
     endpoint: PluginServiceEndpoint,
@@ -271,6 +370,7 @@ fn run(
     source: PluginSource,
     input_activity: Option<Box<dyn Fn() -> InputActivity + Send>>,
     input_events: Option<Box<dyn crate::PluginInputEvents>>,
+    companion: CompanionSinks,
 ) -> Result<(), PluginManagerError> {
     let Ok(mut manager) = PluginManager::new(directory) else {
         // The store could not be opened at all. The service still answers, so the
@@ -318,6 +418,9 @@ fn run(
         started: Instant::now(),
         last_tick: Duration::ZERO,
         shutdown_reply: None,
+        companion,
+        last_pet_bounds: None,
+        seen_bubbles: BTreeMap::new(),
     };
     worker.initialize_running_input_activity();
     worker.run(stop)
@@ -350,6 +453,7 @@ impl Unavailable {
                 }
                 PluginCommand::SetEnabled { reply, .. }
                 | PluginCommand::InstallAvailable { reply, .. }
+                | PluginCommand::InstallLocal { reply, .. }
                 | PluginCommand::Uninstall { reply, .. }
                 | PluginCommand::ResetData { reply, .. }
                 | PluginCommand::Action { reply, .. }
@@ -390,6 +494,7 @@ impl Worker {
             self.drain_interactions();
             self.dispatch_tick();
             self.manager.collect_updates();
+            self.publish_companion();
             self.compose();
             thread::park_timeout(LOOP_INTERVAL);
         }
@@ -408,6 +513,85 @@ impl Worker {
             let _ = reply.respond(());
         }
         Ok(())
+    }
+
+    /// Publish the newest companion menu, queue unseen bubbles and forward the
+    /// model window rectangle. Menu and bubble reads are cheap: two plugins and
+    /// bounded outputs, once per service loop.
+    fn publish_companion(&mut self) {
+        let mut menu = Vec::new();
+        let mut arrivals = Vec::new();
+        for (metadata, state) in self.manager.list_plugins() {
+            if state != PluginState::Enabled {
+                continue;
+            }
+            let Some(output) = self.manager.plugin_output(&metadata.id).cloned() else {
+                continue;
+            };
+            for item in &output.menu {
+                menu.push(CompanionMenuItem {
+                    plugin: metadata.id.clone(),
+                    action: item.id.clone(),
+                    label: item.label.clone(),
+                });
+            }
+            let seen = self.seen_bubbles.entry(metadata.id.clone()).or_default();
+            for bubble in &output.bubbles {
+                if seen.insert(bubble.id.clone()) {
+                    arrivals.push(QueuedPluginBubble {
+                        plugin: metadata.id.clone(),
+                        bubble: bubble.clone(),
+                    });
+                }
+            }
+            // A plugin publishes only its recent bubble ring, so a set that has
+            // grown far past that ring cannot still be matching live entries.
+            if seen.len() > 512 {
+                seen.clear();
+            }
+        }
+        menu.truncate(16);
+        let menu_changed = {
+            let current = self
+                .companion
+                .menu_items
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            current.as_slice() != menu.as_slice()
+        };
+        if menu_changed {
+            *self
+                .companion
+                .menu_items
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = menu;
+        }
+        if !arrivals.is_empty() {
+            self.companion
+                .bubbles
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(arrivals);
+        }
+        let bounds = *self
+            .companion
+            .pet_bounds
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(bounds) = bounds
+            && self.last_pet_bounds != Some(bounds)
+        {
+            self.manager.pet_bounds(bounds);
+            self.last_pet_bounds = Some(bounds);
+        }
+    }
+
+    fn clear_plugin_bubbles(&self, plugin: &str) {
+        self.companion
+            .bubbles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|queued| queued.plugin != plugin);
     }
 
     fn start_catalog_job(
@@ -517,6 +701,7 @@ impl Worker {
                 self.error = Some(error.to_string());
             }
             self.initialize_plugin_input_activity(&offer.metadata.id);
+            self.last_pet_bounds = None;
         }
     }
 
@@ -673,7 +858,10 @@ impl Worker {
                     name: metadata.name.clone(),
                     description: metadata.description.clone(),
                     localizations: metadata.localizations,
-                    icon_url: icon_urls.get(&metadata.id).cloned(),
+                    icon_url: icon_urls
+                        .get(&metadata.id)
+                        .cloned()
+                        .or_else(|| self.manager.installed_icon_url(&metadata.id)),
                     enabled: state == PluginState::Enabled,
                     failed: state == PluginState::Failed,
                     version,
@@ -782,6 +970,10 @@ impl Worker {
                 }
                 if result.is_ok() && enabled {
                     self.initialize_plugin_input_activity(&id);
+                    self.last_pet_bounds = None;
+                }
+                if result.is_ok() && !enabled {
+                    self.clear_plugin_bubbles(&id);
                 }
                 self.respond(reply, result);
             }
@@ -824,6 +1016,34 @@ impl Worker {
                     self.respond(reply, Err(PluginCommandError::Operation));
                 }
             }
+            PluginCommand::InstallLocal { bytes, reply } => {
+                if !self.install_jobs.is_empty() {
+                    self.respond(reply, Err(PluginCommandError::Operation));
+                    return;
+                }
+                self.error = None;
+                let result = match self.manager.install_local(&bytes) {
+                    Ok(installed) => {
+                        let id = installed.id;
+                        match self.manager.enable_plugin(&id) {
+                            Ok(()) => {
+                                self.initialize_plugin_input_activity(&id);
+                                self.last_pet_bounds = None;
+                                Ok(())
+                            }
+                            Err(error) => {
+                                self.error = Some(error.to_string());
+                                Err(PluginCommandError::Operation)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        Err(PluginCommandError::Operation)
+                    }
+                };
+                self.respond(reply, result);
+            }
             PluginCommand::Uninstall { id, reply } => {
                 let result = self
                     .manager
@@ -832,6 +1052,7 @@ impl Worker {
                     .map_err(|error| operation(&error));
                 if result.is_ok() {
                     self.interaction_failures.remove(&id);
+                    self.clear_plugin_bubbles(&id);
                 }
                 self.respond(reply, result);
             }
@@ -844,6 +1065,10 @@ impl Worker {
                     .map(|_| ())
                     .map_err(|error| operation(&error));
                 self.initialize_plugin_input_activity(&id);
+                if result.is_ok() {
+                    self.clear_plugin_bubbles(&id);
+                    self.last_pet_bounds = None;
+                }
                 self.respond(reply, result);
             }
             PluginCommand::Action {
@@ -1129,6 +1354,13 @@ mod tests {
             started: Instant::now(),
             last_tick: Duration::ZERO,
             shutdown_reply: None,
+            companion: CompanionSinks {
+                menu_items: Arc::new(RwLock::new(Vec::new())),
+                bubbles: Arc::new(Mutex::new(Vec::new())),
+                pet_bounds: Arc::new(RwLock::new(None)),
+            },
+            last_pet_bounds: None,
+            seen_bubbles: BTreeMap::new(),
         }
     }
 

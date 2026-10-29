@@ -643,6 +643,13 @@ impl ProductOverlaySession {
         self.overlay.window.bounds()
     }
 
+    pub(crate) fn scale_factor(&self) -> f32 {
+        // SAFETY: the HWND belongs to this session and is read for its current
+        // DPI only; the call retains no pointer or handle.
+        let dpi = unsafe { GetDpiForWindow(self.overlay.window.hwnd) };
+        if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 }
+    }
+
     /// Apply `system.show_taskbar_icon` to the live model window.
     ///
     /// The applied value is recorded on the session as well as the window,

@@ -204,6 +204,9 @@ pub(super) fn plugin_failure_message(
             };
             bongocat_i18n::format_text(locale, key, &[("name", plugin_name(plugin))])
         }
+        PluginFailure::InstallLocal => {
+            bongocat_i18n::text(locale, "plugins.errors.install_local_failed").to_owned()
+        }
         PluginFailure::Enable { plugin, enabled } => {
             let key = if *enabled {
                 "plugins.errors.enable_failed"
@@ -288,6 +291,7 @@ pub(super) fn plugin_failure_notification_id(failure: &PluginFailure) -> SharedS
         }
         PluginFailure::Preview { plugin, key } => format!("plugin-preview-{plugin}-{key}").into(),
         PluginFailure::Install { plugin, .. } => format!("plugin-install-{plugin}").into(),
+        PluginFailure::InstallLocal => "plugin-install-local".into(),
         PluginFailure::Enable { plugin, enabled } => {
             format!("plugin-enable-{plugin}-{enabled}").into()
         }

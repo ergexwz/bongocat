@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Companion window permissions for the todo plugin",
+  "windows": [
+    "runtime",
+    "todo",
+    "todo-mini",
+    "bubble"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-available-monitors",
+    "core:window:allow-current-monitor",
+    "core:window:allow-hide",
+    "core:window:allow-inner-size",
+    "core:window:allow-is-visible",
+    "core:window:allow-outer-position",
+    "core:window:allow-outer-size",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-show",
+    "core:window:allow-start-dragging",
+    "core:window:default",
+    "core:webview:allow-set-webview-zoom",
+    "notification:default"
+  ]
+}

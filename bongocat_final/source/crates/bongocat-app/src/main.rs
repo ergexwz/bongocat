@@ -135,6 +135,30 @@ use update_schedule::{
     AUTOMATIC_UPDATE_SETTINGS_RETRY_INTERVAL, automatic_update_schedule_delay,
 };
 
+fn publish_plugin_pet_bounds(
+    reporter: &Option<bongocat_plugin_service::PetBoundsReporter>,
+    overlay: &bongocat_overlay::ProductOverlaySession,
+    last: &mut Option<bongocat_plugin_service::PetBounds>,
+) {
+    let Some(reporter) = reporter else {
+        return;
+    };
+    let Ok(bounds) = overlay.window_bounds() else {
+        return;
+    };
+    let pet = bongocat_plugin_service::PetBounds {
+        x: bounds.x as f32,
+        y: bounds.y as f32,
+        width: bounds.width as f32,
+        height: bounds.height as f32,
+        scale: overlay.scale_factor(),
+    };
+    if pet.validate() && *last != Some(pet) {
+        reporter.set(pet);
+        *last = Some(pet);
+    }
+}
+
 fn gpui_application() -> GpuiApplication {
     // Quitting is owned by the product shutdown paths (tray menu, smoke recipes,
     // update restart), not by window bookkeeping: the product stays alive behind
@@ -383,6 +407,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(service) = &plugin_service {
         application.attach_plugin_service(service.client());
     }
+    let plugin_pet_bounds = plugin_service
+        .as_ref()
+        .map(bongocat_plugin_service::PluginService::pet_bounds_reporter);
     application.install_process_panic_hook();
     let core_log = CoreLogHandle::install(
         application.logs_directory(),
@@ -611,7 +638,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
         };
-        let initial_menu_presentation = system_menu_presentation(&initial_settings_snapshot);
+        let initial_menu_presentation = system_menu_presentation(&initial_settings_snapshot, &[]);
         let system_menu = match SystemMenu::start_with_presentation(
             initial_status_icon_visible,
             initial_menu_presentation,
@@ -995,11 +1022,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let system_menu_action_client = system_menu_client.clone();
         cx.spawn(async move |cx| {
             let mut last_menu_revision = None;
+            let mut last_plugin_items = Vec::new();
             loop {
                 Timer::after(Duration::from_millis(50)).await;
                 if !cx.update(|cx| cx.has_global::<ProductCoordinator>()) {
                     break;
                 }
+                let plugin_items = cx.update(|cx| {
+                    cx.try_global::<ProductCoordinator>()
+                        .and_then(|coordinator| coordinator.plugin_service.as_ref())
+                        .map(bongocat_plugin_service::PluginService::menu_items)
+                        .unwrap_or_default()
+                });
+                let plugin_items_changed = plugin_items != last_plugin_items;
                 // Ask for the revision first. This loop runs at 20 Hz for the whole
                 // product lifetime, and a full snapshot also scans the model catalog —
                 // work the menu cannot act on. The revision is a cheap comparison
@@ -1008,11 +1043,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Ok(revision) = system_menu_client.read_snapshot_revision().await else {
                     continue;
                 };
-                if last_menu_revision == Some(revision) {
+                if last_menu_revision == Some(revision) && !plugin_items_changed {
                     continue;
                 }
                 if let Ok(snapshot) = system_menu_client.read_snapshot().await {
-                    let presentation = system_menu_presentation(&snapshot);
+                    let presentation = system_menu_presentation(&snapshot, &plugin_items);
                     let language = snapshot.resolved_language;
                     let appearance_theme = snapshot.appearance_theme;
                     let result = cx.update(|cx| {
@@ -1034,7 +1069,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .map_err(|error| error.to_string())
                     });
                     match result {
-                        Ok(()) => last_menu_revision = Some(snapshot.revision),
+                        Ok(()) => {
+                            last_menu_revision = Some(snapshot.revision);
+                            last_plugin_items = plugin_items;
+                        }
                         Err(error) => record_failure(&system_menu_snapshot_failures, error),
                     }
                 }
@@ -1099,10 +1137,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     SystemMenuAction::OpenSettings => {
                         cx.update(|cx| ensure_settings_window(cx).map(|_| true))
                     }
-                    SystemMenuAction::ToggleOverlayVisibility
+                    action @ (SystemMenuAction::ToggleOverlayVisibility
                     | SystemMenuAction::ToggleClickThrough
                     | SystemMenuAction::ToggleAlwaysOnTop
-                    | SystemMenuAction::ToggleHideOnPointerHover => {
+                    | SystemMenuAction::ToggleHideOnPointerHover) => {
                         let client = cx.update(|cx| {
                             cx.try_global::<ProductCoordinator>()
                                 .and_then(|coordinator| coordinator.settings_service.as_ref())
@@ -1113,6 +1151,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                         match client {
                             Ok(client) => apply_system_menu_overlay_action(client, action).await,
+                            Err(error) => Err(error),
+                        }
+                    }
+                    SystemMenuAction::Plugin { plugin, action } => {
+                        let client = cx.update(|cx| {
+                            cx.try_global::<ProductCoordinator>()
+                                .and_then(|coordinator| coordinator.plugin_service.as_ref())
+                                .map(bongocat_plugin_service::PluginService::client)
+                                .ok_or_else(|| {
+                                    "plugin service is unavailable for the system menu".to_owned()
+                                })
+                        });
+                        match client {
+                            Ok(client) => client
+                                .action(&plugin, &action)
+                                .await
+                                .map(|_| true)
+                                .map_err(|error| error.to_string()),
                             Err(error) => Err(error),
                         }
                     }
@@ -1193,8 +1249,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let frame_settings_client = settings_client.clone();
         let frame_application_log = application_log.clone();
         let frame_source_guard = frame_source_shutdown.run_guard();
+        let frame_pet_bounds = plugin_pet_bounds;
         cx.spawn(async move |cx| {
             let _frame_source_guard = frame_source_guard;
+            let mut last_pet_bounds = None;
             #[cfg(target_os = "windows")]
             let mut frame_active = true;
             #[cfg(target_os = "windows")]
@@ -1247,11 +1305,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !coordinator.frame_source_running {
                             return (false, None);
                         }
-                        let result = coordinator
+                        let overlay = coordinator
                             .overlay
                             .as_mut()
-                            .expect("product overlay owner is present")
-                            .tick();
+                            .expect("product overlay owner is present");
+                        let result = overlay.tick();
+                        publish_plugin_pet_bounds(
+                            &frame_pet_bounds,
+                            overlay,
+                            &mut last_pet_bounds,
+                        );
                         if context_menu_requested
                             && let Some(menu) = coordinator.system_menu.as_ref()
                             && let Some(overlay) = coordinator.overlay.as_ref()
@@ -1337,6 +1400,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .as_mut()
                         .expect("product overlay owner is present while the frame source runs");
                     let result = overlay.tick();
+                    publish_plugin_pet_bounds(
+                        &frame_pet_bounds,
+                        overlay,
+                        &mut last_pet_bounds,
+                    );
                     if result.is_ok()
                         && let Ok(bounds) = overlay.window_bounds()
                         && last_overlay_bounds != Some(bounds)

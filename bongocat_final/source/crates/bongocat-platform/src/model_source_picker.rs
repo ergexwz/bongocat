@@ -90,6 +90,49 @@ where
         .map_err(|_| ModelSourcePickerError::BackendUnavailable)
 }
 
+/// Let the user choose a plugin package ZIP.
+#[cfg(target_os = "macos")]
+pub(crate) fn pick_plugin_package<F>(on_complete: F) -> Result<(), ModelSourcePickerError>
+where
+    F: FnOnce(Option<PathBuf>) + Send + 'static,
+{
+    let mtm = MainThreadMarker::new().ok_or(ModelSourcePickerError::WrongThread)?;
+    if !asynchronous_sheet_is_available(mtm) {
+        return Err(ModelSourcePickerError::BackendUnavailable);
+    }
+    let task = autoreleasepool(|_| {
+        rfd::AsyncFileDialog::new()
+            .add_filter("BongoCat plugin", &["zip"])
+            .pick_file()
+    });
+    std::thread::Builder::new()
+        .name("bongocat-plugin-package-picker".to_owned())
+        .spawn(move || {
+            let path = async_io::block_on(task).map(|handle| handle.path().to_path_buf());
+            on_complete(path);
+        })
+        .map(|_| ())
+        .map_err(|_| ModelSourcePickerError::BackendUnavailable)
+}
+
+/// Let the user choose a plugin package ZIP.
+#[cfg(target_os = "windows")]
+pub(crate) fn pick_plugin_package<F>(on_complete: F) -> Result<(), ModelSourcePickerError>
+where
+    F: FnOnce(Option<PathBuf>) + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name("bongocat-plugin-package-picker".to_owned())
+        .spawn(move || {
+            let path = rfd::FileDialog::new()
+                .add_filter("BongoCat plugin", &["zip"])
+                .pick_file();
+            on_complete(path);
+        })
+        .map(|_| ())
+        .map_err(|_| ModelSourcePickerError::BackendUnavailable)
+}
+
 /// Let the user choose the model folder to import.
 #[cfg(target_os = "macos")]
 pub(crate) fn pick_model_folder<F>(on_complete: F) -> Result<(), ModelSourcePickerError>

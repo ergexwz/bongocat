@@ -45,19 +45,25 @@ pub(super) fn content(
     // nothing newer than what is installed cannot enable it by any later state,
     // whereas loading, refreshing and a running package operation are temporary
     // and keep the button on screen, disabled, so the user can still read why.
+    let install_local_view = handle.clone();
+    let install_local = Button::new("plugin-install-local")
+        .label(bongocat_i18n::text(locale, "plugins.install_local"))
+        .loading(state.local_install_pending())
+        .disabled(state.updating_all() || state.local_install_pending())
+        .on_click(move |_, window, cx| {
+            install_local_view.update(cx, |view, cx| {
+                view.install_local_plugin(window, cx);
+            });
+        });
     let tools = div()
         .flex()
         .flex_wrap()
         .items_center()
         .justify_end()
         .gap_3()
+        .child(install_local)
         .children(state.has_updates().then_some(update_all));
-    let mut column = div()
-        .flex()
-        .flex_col()
-        .gap_4()
-        .w_full()
-        .children(state.has_updates().then_some(tools));
+    let mut column = div().flex().flex_col().gap_4().w_full().child(tools);
     if state.loading && state.cards.is_empty() {
         column = column.child(
             div()
@@ -101,6 +107,7 @@ pub(super) fn action_icon(icon: ActionIcon) -> IconName {
         ActionIcon::Pause => IconName::Pause,
         ActionIcon::Restart => IconName::RefreshCw,
         ActionIcon::Volume => IconName::AudioLines,
+        ActionIcon::Settings => IconName::Settings,
     }
 }
 
@@ -180,18 +187,19 @@ fn card_view(
     // Every installed, running plugin offers one settings entry, and it is drawn
     // the same way on every card: a gear beside the identity it configures,
     // rather than one more button in the row of package lifecycle commands.
-    let settings_entry = (installed && enabled && !card.failed).then(|| {
-        let target = view.clone();
-        let id = card.id.clone();
-        Button::new(SharedString::from(format!("plugin-settings-{}", card.id)))
-            .icon(IconName::Settings)
-            .tooltip(bongocat_i18n::text(locale, "plugins.settings.open"))
-            .disabled(busy)
-            .on_click(move |_, window, cx| {
-                let id = id.clone();
-                target.update(cx, |view, cx| view.open_plugin_settings(&id, window, cx));
-            })
-    });
+    let settings_entry =
+        (installed && enabled && !card.failed && !card.settings.is_empty()).then(|| {
+            let target = view.clone();
+            let id = card.id.clone();
+            Button::new(SharedString::from(format!("plugin-settings-{}", card.id)))
+                .icon(IconName::Settings)
+                .tooltip(bongocat_i18n::text(locale, "plugins.settings.open"))
+                .disabled(busy)
+                .on_click(move |_, window, cx| {
+                    let id = id.clone();
+                    target.update(cx, |view, cx| view.open_plugin_settings(&id, window, cx));
+                })
+        });
     let body = div()
         .id(SharedString::from(format!("plugin-card-{}", card.id)))
         .test_support()
@@ -520,6 +528,99 @@ impl SettingsView {
             cx,
         );
         cx.notify();
+    }
+
+    /// Install a plugin package the user picked from disk.
+    ///
+    /// The picker runs on a native dialog thread and the read runs on the
+    /// background executor; only the final hand-off returns to GPUI. The
+    /// confirmation dialog names the trust boundary before any file is read, so
+    /// this path never becomes an implicit catalog fallback.
+    pub(super) fn install_local_plugin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.plugin_host.snapshot().package_busy() {
+            return;
+        }
+        let locale = self.display_language().catalog_locale();
+        let title = bongocat_i18n::text(locale, "plugins.install_local_title").to_owned();
+        let warning = bongocat_i18n::text(locale, "plugins.install_local_warning").to_owned();
+        let confirm = bongocat_i18n::text(locale, "plugins.install_local_confirm").to_owned();
+        let cancel = bongocat_i18n::text(locale, "plugins.install_local_cancel").to_owned();
+        let view = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let warning = warning.clone();
+            let pick_view = view.clone();
+            dialog
+                .title(title.clone())
+                .w(460.0)
+                .button_props(DialogButtonProps::default().show_cancel(false))
+                .content(move |content, _, _| content.child(div().text_sm().child(warning.clone())))
+                .footer(
+                    div()
+                        .flex()
+                        .w_full()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("plugin-install-local-cancel")
+                                .label(cancel.clone())
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            Button::new("plugin-install-local-confirm")
+                                .primary()
+                                .label(confirm.clone())
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = pick_view.update(cx, |view, cx| {
+                                        view.pick_local_plugin(cx);
+                                    });
+                                }),
+                        ),
+                )
+        });
+    }
+
+    fn pick_local_plugin(&mut self, cx: &mut Context<Self>) {
+        let (sender, receiver) = async_channel::bounded(1);
+        let selected = move |path| {
+            let _ = sender.try_send(path);
+        };
+        if let Err(_error) = bongocat_platform::pick_plugin_package(selected) {
+            self.plugin_host.fail_local_install();
+            self.pending_notification = Some(SettingsError::new(
+                SettingsErrorCode::ModelSourcePickerUnavailable,
+            ));
+            cx.notify();
+            return;
+        }
+        self.plugin_host.begin(PluginInFlight::LocalInstall);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let path = receiver.recv().await.ok().flatten();
+            let Some(path) = path else {
+                let _ = this.update(cx, |view, cx| {
+                    view.plugin_host.finish(&PluginInFlight::LocalInstall);
+                    cx.notify();
+                });
+                return;
+            };
+            let bytes = cx
+                .background_executor()
+                .spawn(async move { std::fs::read(path) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                match bytes {
+                    Ok(bytes) if bytes.len() <= 64 * 1024 * 1024 => {
+                        view.plugin_host.install_local(bytes);
+                    }
+                    _ => view.plugin_host.fail_local_install(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn update_all_plugins(&mut self, cx: &mut Context<Self>) {

@@ -1,6 +1,8 @@
 //! Process-backed plugin registry. A failed child only removes that entry.
 use crate::loader::Process;
-use bongocat_plugin_sdk::{Configuration, HostMessage, PluginMetadata, PluginOutput, UiNode};
+use bongocat_plugin_sdk::{
+    Configuration, HostMessage, PetBounds, PluginMetadata, PluginOutput, UiNode,
+};
 use std::{collections::BTreeMap, io, path::PathBuf};
 use thiserror::Error;
 
@@ -445,6 +447,21 @@ impl PluginRegistry {
                     events: events.clone(),
                     overflow,
                 });
+            }
+        }
+    }
+    /// Hand the model window's logical rectangle to every running companion
+    /// plugin. Plugins that did not ask for it are never sent a frame they
+    /// cannot parse.
+    pub fn pet_bounds(&mut self, bounds: PetBounds) {
+        for entry in self.entries.values_mut() {
+            if entry.process.is_some()
+                && entry
+                    .metadata
+                    .capabilities
+                    .contains(&bongocat_plugin_sdk::Capability::CompanionV1)
+            {
+                let _ = entry.required_exchange(HostMessage::PetBounds { bounds });
             }
         }
     }

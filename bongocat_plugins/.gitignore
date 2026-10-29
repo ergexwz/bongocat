@@ -1,0 +1,7 @@
+target/
+dist/*
+!dist/*.zip
+node_modules/
+plugins/*/ui/dist/
+plugins/*/ui/node_modules/
+plugins/*/gen/

@@ -622,6 +622,10 @@ impl ProductOverlaySession {
         Ok(overlay)
     }
 
+    pub(crate) fn scale_factor(&self) -> f32 {
+        self.overlay.panel.backingScaleFactor() as f32
+    }
+
     pub(crate) fn window_bounds(&self) -> Result<OverlayWindowBounds, OverlayError> {
         let frame = self.overlay.panel.frame();
         OverlayWindowBounds::new(

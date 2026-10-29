@@ -36,7 +36,9 @@
   "system_menu": {
     "title": "BongoCat",
     "open_settings": "设置",
-    "quit": "退出 BongoCat"
+    "quit": "退出 BongoCat",
+    "plugins": "插件",
+    "plugins_empty": "暂无运行中的伴随插件"
   },
   "application_menu": {
     "file": "文件",
@@ -573,6 +575,18 @@
     "update_all": "更新全部",
     "update_available": "可更新",
     "update_all_success": "所有插件均已更新。",
+    "install_local": "从文件安装…",
+    "install_local_title": "安装本地插件",
+    "install_local_warning": "插件是本地可执行代码，会以你的权限运行。只安装你信任的 ZIP。",
+    "install_local_confirm": "安装",
+    "install_local_cancel": "取消",
+    "install_local_success": "插件已安装。",
+    "install_local_invalid": "这不是有效的插件包。",
+    "install_local_too_large": "插件包过大。",
+    "install_local_incompatible": "该插件不支持当前 BongoCat 版本。",
+    "install_local_version_exists": "该插件版本已安装。请构建更新的版本，或先卸载旧版本。",
+    "bubble_more": "还有 %{count} 条通知",
+    "bubble_close": "关闭",
     "available_version": "可用版本 %{version}",
     "uninstall": "卸载",
     "uninstall_confirm": "确定要卸载“%{name}”吗？",
@@ -584,6 +598,7 @@
     "version": "版本 %{version}",
     "errors": {
       "install_failed": "插件安装失败：%{name}",
+      "install_local_failed": "本地插件安装失败。",
       "update_failed": "插件更新失败：%{name}",
       "enable_failed": "插件启用失败：%{name}",
       "disable_failed": "插件停用失败：%{name}",

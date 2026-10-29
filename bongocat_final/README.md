@@ -1,6 +1,6 @@
-# BongoCat 2.4.1 — Xbox/XInput 后台手柄修复版
+# BongoCat 2.5.0 — Xbox/XInput 后台手柄修复 + 伴随插件版
 
-这是基于 upstream BongoCat 2.4.0 的本地 2.4.1 构建，修复了 Windows 上 Xbox 手柄在桌宠窗口不获得前台焦点时没有输入的问题，并修复了 Xbox HID 键盘报告导致 gamepad/standard 模型频繁自动切换的问题。
+这是基于 upstream BongoCat 2.4.0 的本地 2.5.0 构建，修复了 Windows 上 Xbox 手柄在桌宠窗口不获得前台焦点时没有输入的问题，并修复了 Xbox HID 键盘报告导致 gamepad/standard 模型频繁自动切换的问题；同时加入待办 / 邮件独立插件系统。
 
 ## 直接运行
 
@@ -35,13 +35,33 @@ bongocat_final/
   resources/
     models/                   内置 standard / keyboard / gamepad 模型
     build-provenance.json     原发布元数据
-  bongocat-xinput.patch       相对 v2.4.0 的源码补丁
+  bongocat-xinput.patch       2.4.1 时期相对 v2.4.0 的 Xbox/XInput 补丁（历史）
   BUILD.md                    从源码重新构建的步骤
-  source/                     修改后的完整 v2.4.1 源码（基于 upstream 2.4.0，无 target/.git）
+  source/                     修改后的完整 v2.5.0 源码（基于 upstream 2.4.0，无 target/.git）
   THIRD_PARTY_NOTICES.md      第三方组件说明
 ```
 
 **不要只复制 `bongocat-app.exe`**：程序从可执行文件同目录的 `resources/models` 加载内置模型。分发时请复制整个 `bongocat_final` 文件夹。
+
+## 伴随插件（待办 / 邮件）
+
+完整源码在仓库根目录的 `bongocat_plugins/`，包含两个独立 Tauri 2 插件进程：
+
+- `com.bongocat.todo`：手绘待办面板、快速新建、到期气泡。
+- `com.bongocat.mail`：IMAP 邮件列表、归档、设置和桌宠气泡。
+
+已构建的 ZIP 位于 `bongocat_plugins/dist/`。如需重新构建：
+
+```powershell
+cd bongocat_plugins
+.\scripts\package.ps1
+```
+
+然后在 BongoCat 设置 → 插件中心点击“从文件安装”，选择 `dist/` 下的 ZIP。
+右键桌宠（或托盘菜单）的“插件”子菜单会打开待办/邮件窗口。
+
+本地安装的插件是可执行代码，宿主会要求确认信任来源；插件数据保存在
+`%APPDATA%\com.ayangweb.bongo-cat\production\plugins\data\` 下。
 
 ## 修复内容
 

@@ -1,0 +1,9 @@
+BongoCat 2.5.0 使用说明
+
+1、单次启动：右键 BongoCat.exe 以管理员身份运行
+2、（只看这一行即可）一次性永久设置：右键 BongoCat.exe -> 兼容性 -> 以管理员身份运行
+
+插件：
+- 待办、邮件为独立插件包，请在 BongoCat 的“插件中心”点击“从文件安装”，选择对应的 ZIP。
+- 安装后可从插件菜单打开；邮件插件需先在设置中配置 IMAP 账号。
+- 插件窗口使用系统 WebView2 运行时；Windows 10/11 通常已自带，若窗口空白请安装 Microsoft Edge WebView2 Runtime。

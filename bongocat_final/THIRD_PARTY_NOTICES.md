@@ -1,14 +1,14 @@
 # Third-party notices
 
-This folder is a local build of BongoCat 2.4.1, based on upstream 2.4.0.
+This folder is a local build of BongoCat 2.5.0, based on upstream 2.4.0.
 
 ## BongoCat
 
 - Upstream: https://github.com/ayangweb/BongoCat
-- Local version: 2.4.1
+- Local version: 2.5.0
 - Upstream base: 2.4.0, commit `b82b4750b776df1408db07d5858d37db1594c3f3`
 - License: Apache License 2.0; see `source/LICENSE`
-- Local changes: see `bongocat-xinput.patch`
+- Local changes: Xbox/XInput fix, zero-scan-code input reset, and the companion plugin system
 
 ## Live2D Cubism Core
 

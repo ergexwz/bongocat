@@ -20,6 +20,8 @@ const TRAY_ICON_ID: &str = "bongocat.system-menu";
 const TRAY_ICON_GUID: u128 = 0x123f3c6f_7d2a_4ca3_b8cb_9b1d1eaf2f10;
 const OPEN_SETTINGS_ID: &str = "bongocat.open-settings";
 const MODEL_WINDOW_SUBMENU_ID: &str = "bongocat.model-window";
+const PLUGIN_SUBMENU_ID: &str = "bongocat.plugins";
+const PLUGIN_ITEM_PREFIX: &str = "bongocat.plugin.";
 const TOGGLE_OVERLAY_VISIBILITY_ID: &str = "bongocat.toggle-overlay";
 const TOGGLE_CLICK_THROUGH_ID: &str = "bongocat.toggle-click-through";
 const TOGGLE_ALWAYS_ON_TOP_ID: &str = "bongocat.toggle-always-on-top";
@@ -44,6 +46,9 @@ pub struct SystemMenu {
     tray_icon: TrayIcon,
     menu: Menu,
     model_window: Submenu,
+    plugin_menu: Submenu,
+    plugin_items: Vec<MenuItem>,
+    plugin_actions: Vec<(String, String)>,
     items: NativeMenuItems,
     #[cfg(target_os = "windows")]
     tray_icon_id: TrayIconId,
@@ -67,6 +72,7 @@ enum MenuEntry {
     OpenSettings,
     Separator,
     ModelWindow,
+    Plugins,
     ToggleOverlay,
     ToggleClickThrough,
     ToggleAlwaysOnTop,
@@ -79,6 +85,7 @@ const MENU_ENTRIES: &[MenuEntry] = &[
     MenuEntry::OpenSettings,
     MenuEntry::Separator,
     MenuEntry::ModelWindow,
+    MenuEntry::Plugins,
     MenuEntry::Separator,
     MenuEntry::CheckForUpdates,
     MenuEntry::Separator,
@@ -188,12 +195,25 @@ impl SystemMenu {
             true,
         );
         append_model_window_entries(&model_window, &items)?;
+        let plugin_menu = Submenu::with_id(
+            MenuId::new(PLUGIN_SUBMENU_ID),
+            &presentation.plugins_menu,
+            true,
+        );
+        let mut plugin_items = Vec::new();
+        let mut plugin_actions = Vec::new();
+        sync_plugin_items(
+            &plugin_menu,
+            &mut plugin_items,
+            &mut plugin_actions,
+            &presentation,
+        )?;
 
         // One menu tree serves both the tray and the model-window context
         // surface. The optional update row is omitted when its channel cannot
         // produce a release.
         let menu = Menu::new();
-        append_menu_entries(&menu, &items, &model_window, MENU_ENTRIES)?;
+        append_menu_entries(&menu, &items, &model_window, &plugin_menu, MENU_ENTRIES)?;
 
         let tray_icon_id = TrayIconId::new(TRAY_ICON_ID);
         let tray_icon_builder = TrayIconBuilder::new()
@@ -229,6 +249,9 @@ impl SystemMenu {
             tray_icon,
             menu,
             model_window,
+            plugin_menu,
+            plugin_items,
+            plugin_actions,
             items,
             #[cfg(target_os = "windows")]
             tray_icon_id,
@@ -257,12 +280,33 @@ impl SystemMenu {
 
         self.items.update(&presentation);
         self.model_window.set_text(&presentation.model_window);
+        self.plugin_menu.set_text(&presentation.plugins_menu);
+        sync_plugin_items(
+            &self.plugin_menu,
+            &mut self.plugin_items,
+            &mut self.plugin_actions,
+            &presentation,
+        )?;
         Ok(())
+    }
+
+    fn action_for_menu_id(&self, id: &MenuId) -> Option<SystemMenuAction> {
+        if let Some(index) =
+            id.0.strip_prefix(PLUGIN_ITEM_PREFIX)
+                .and_then(|value| value.parse::<usize>().ok())
+                .and_then(|index| self.plugin_actions.get(index))
+        {
+            return Some(SystemMenuAction::Plugin {
+                plugin: index.0.clone(),
+                action: index.1.clone(),
+            });
+        }
+        action_for_menu_id(id)
     }
 
     pub fn try_recv(&self) -> Option<SystemMenuAction> {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if let Some(action) = action_for_menu_id(&event.id) {
+            if let Some(action) = self.action_for_menu_id(&event.id) {
                 let _ = self.sender.send(action);
             }
         }
@@ -363,10 +407,48 @@ impl Drop for SystemMenu {
     }
 }
 
+fn sync_plugin_items(
+    menu: &Submenu,
+    current: &mut Vec<MenuItem>,
+    actions: &mut Vec<(String, String)>,
+    presentation: &SystemMenuPresentation,
+) -> Result<(), SystemMenuError> {
+    for item in current.drain(..) {
+        let _ = menu.remove(&item);
+    }
+    actions.clear();
+    if presentation.plugin_items.is_empty() {
+        let empty = MenuItem::with_id(
+            MenuId::new(format!("{PLUGIN_ITEM_PREFIX}empty")),
+            &presentation.plugins_empty,
+            false,
+            None,
+        );
+        menu.append(&empty)
+            .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
+        current.push(empty);
+        return Ok(());
+    }
+    for (index, item) in presentation.plugin_items.iter().enumerate() {
+        let menu_item = MenuItem::with_id(
+            MenuId::new(format!("{PLUGIN_ITEM_PREFIX}{index}")),
+            &item.label,
+            true,
+            None,
+        );
+        menu.append(&menu_item)
+            .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
+        current.push(menu_item);
+        actions.push((item.plugin.clone(), item.action.clone()));
+    }
+    Ok(())
+}
+
 fn append_menu_entries(
     menu: &Menu,
     items: &NativeMenuItems,
     model_window: &Submenu,
+    plugin_menu: &Submenu,
     entries: &[MenuEntry],
 ) -> Result<(), SystemMenuError> {
     let mut previous_was_separator = false;
@@ -390,6 +472,7 @@ fn append_menu_entries(
             MenuEntry::OpenSettings => append_item(menu, &items.open_settings)?,
             MenuEntry::Separator => unreachable!("separator handled above"),
             MenuEntry::ModelWindow => append_item(menu, model_window)?,
+            MenuEntry::Plugins => append_item(menu, plugin_menu)?,
             MenuEntry::ToggleOverlay => append_item(menu, &items.toggle_overlay)?,
             MenuEntry::ToggleClickThrough => append_item(menu, &items.toggle_click_through)?,
             MenuEntry::ToggleAlwaysOnTop => append_item(menu, &items.toggle_always_on_top)?,

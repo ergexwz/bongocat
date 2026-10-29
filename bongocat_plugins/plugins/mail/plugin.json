@@ -1,0 +1,25 @@
+{
+  "metadata": {
+    "id": "com.bongocat.mail",
+    "name": "Mail",
+    "description": "A hand-drawn IMAP mail notification center with accounts, archive and bubbles.",
+    "version": "0.1.0",
+    "app_versions": ">=2.5.0",
+    "protocol_version": 1,
+    "entry": "bongocat-mail",
+    "icon": {
+      "type": "local_image",
+      "value": "resources/icon.png"
+    },
+    "capabilities": [
+      "companion_v1",
+      "localized_views_v1"
+    ],
+    "localizations": {
+      "zh-CN": {
+        "name": "邮件",
+        "description": "手绘风 IMAP 邮件通知中心，支持多账号、归档和桌宠气泡。"
+      }
+    }
+  }
+}

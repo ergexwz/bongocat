@@ -1,0 +1,77 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BongoCat Todo",
+  "version": "0.1.0",
+  "identifier": "com.bongocat.todo",
+  "build": {
+    "frontendDist": "ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "runtime",
+        "title": "BongoCat Todo",
+        "url": "index.html?view=runtime",
+        "visible": false,
+        "width": 1,
+        "height": 1,
+        "decorations": false,
+        "transparent": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
+        "label": "todo",
+        "title": "Todo",
+        "url": "index.html?view=todo",
+        "visible": false,
+        "width": 380,
+        "height": 560,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
+        "label": "todo-mini",
+        "title": "Quick Add",
+        "url": "index.html?view=todo-mini",
+        "visible": false,
+        "width": 380,
+        "height": 130,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      },
+      {
+        "label": "bubble",
+        "title": "Todo",
+        "url": "index.html?view=bubble",
+        "visible": false,
+        "width": 380,
+        "height": 140,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.ico"
+    ]
+  }
+}
