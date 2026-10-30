@@ -23,3 +23,11 @@ The repository contains a locally built, patched BongoCat 2.5.0 development copy
 ## Verification
 
 - Run `python3 -m json.tool <file>` on changed JSON, check that all paths in `cat.model3.json` exist, and use `file` to validate edited images. There is no project test command.
+
+## Workspace hygiene
+
+- Temporary files go to `$env:TEMP` (session-private) or the repo-root `.dsh-scratch/`; delete the latter before the final answer.
+- Build caches live in `bongocat_final/source/target` and `bongocat_plugins/target`; report their sizes and never create a second copy.
+- `diagnose-windows-sandbox-acl` writes `../dsh-acl-recovery/` outside the repo, so the turn change card cannot show it. After a verified repair, delete it or list it (with its rollback command) in the final answer.
+- Finish with `git status --porcelain -uall`: only intended changes; account for every untracked path.
+- Keep `version/BongoCat_2.5.0/` free of development or temporary files.
