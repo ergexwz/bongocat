@@ -4,11 +4,17 @@
 /// value from its settings snapshot so platform code never becomes a second
 /// source of configuration or localization state.
 /// One plugin-owned entry shown in the host's plugin submenu.
+///
+/// A node with `children` opens a submenu and carries no action; a leaf carries
+/// the action id the plugin will receive and, for radio-style choices, the check
+/// state the host draws.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SystemMenuPluginItem {
     pub plugin: String,
-    pub action: String,
+    pub action: Option<String>,
     pub label: String,
+    pub checked: Option<bool>,
+    pub children: Vec<SystemMenuPluginItem>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -412,6 +412,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bongocat-cyberwork"
+version = "0.1.0"
+dependencies = [
+ "bongocat-companion",
+ "bongocat-plugin-sdk",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tempfile",
+]
+
+[[package]]
 name = "bongocat-mail"
 version = "0.1.0"
 dependencies = [

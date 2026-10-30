@@ -1,6 +1,6 @@
 # AGENTS.md
 
-The repository contains a locally built, patched BongoCat 2.5.0 development copy in `bongocat_final/` (with full source), a minimal runtime-only release in `version/BongoCat_2.5.0/`, and the archived 2.4.1 release in `version/BongoCat_2.4.1/`. The two companion plugins live in `bongocat_plugins/`.
+The repository contains a locally built, patched BongoCat 2.5.0 development copy in `bongocat_final/` (with full source), a minimal runtime-only release in `version/BongoCat_2.5.0/`, and the archived 2.4.1 release in `version/BongoCat_2.4.1/`. The companion plugins live in `bongocat_plugins/` (todo, mail, cyberwork).
 
 ## Critical constraints
 

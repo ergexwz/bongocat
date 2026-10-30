@@ -5,6 +5,7 @@ members = [
     "crates/bongocat-companion",
     "plugins/todo",
     "plugins/mail",
+    "plugins/cyberwork",
 ]
 
 [workspace.package]

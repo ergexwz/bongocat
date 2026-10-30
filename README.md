@@ -6,10 +6,11 @@
 
 **下载教程**：下载 `bongocat/version/BongoCat_2.5.0` 整个文件夹即可食用（2.5.0 不提供 ZIP；`BongoCat_2.4.1` 目录与 ZIP 保留为旧版归档）。
 
-**伴随插件**：`bongocat_plugins/dist/` 已提供待办与邮件两个独立插件 ZIP；在
+**伴随插件**：`bongocat_plugins/dist/` 已提供待办、邮件与“赛博打工”三个独立插件 ZIP；在
 插件中心“从文件安装”选择即可。源码与重新打包方法详见 `bongocat_plugins/README.md`。
 邮件插件 0.1.1 起，邮件列表、归档和邮件设置窗口支持标题栏缩放、右下角拖动缩放
-（固定宽高比，每个窗口的比例会保存）。
+（固定宽高比，每个窗口的比例会保存）。赛博打工在桌宠头顶显示键鼠敲击计数器，并在
+gamepad 模式下统计游戏时长；右键桌宠 → 插件 → 计数器缩放 / 使用历史。
 
 **开机自启动**：登录任务会记录当前 `BongoCat.exe` 的实际位置；移动程序文件夹后，
 第一次以管理员身份启动会自动把任务更新到新位置。若设置页提示“应用位置已变化”，
@@ -37,7 +38,7 @@ Requirements: Windows 10 1903+ x64.
 
 Locally built BongoCat 2.5.0 (based on upstream 2.4.0) with the Xbox/XInput
 background-gamepad fix, the zero-scan-code input-reset fix, and the companion
-plugin system (todo / mail plugins are installed from local ZIPs).
+plugin system (todo / mail / Cyber Work plugins are installed from local ZIPs).
 
 ```text
 bongocat_final\run.bat

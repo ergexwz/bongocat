@@ -135,14 +135,14 @@ use update_schedule::{
     AUTOMATIC_UPDATE_SETTINGS_RETRY_INTERVAL, automatic_update_schedule_delay,
 };
 
-fn publish_plugin_pet_bounds(
-    reporter: &Option<bongocat_plugin_service::PetBoundsReporter>,
+fn publish_plugin_companion(
+    bounds_reporter: &Option<bongocat_plugin_service::PetBoundsReporter>,
+    state_reporter: &Option<bongocat_plugin_service::PetStateReporter>,
     overlay: &bongocat_overlay::ProductOverlaySession,
-    last: &mut Option<bongocat_plugin_service::PetBounds>,
+    runtime: &bongocat_runtime::RuntimeClient,
+    last_bounds: &mut Option<bongocat_plugin_service::PetBounds>,
+    last_state: &mut Option<bongocat_plugin_service::PetState>,
 ) {
-    let Some(reporter) = reporter else {
-        return;
-    };
     let Ok(bounds) = overlay.window_bounds() else {
         return;
     };
@@ -153,9 +153,29 @@ fn publish_plugin_pet_bounds(
         height: bounds.height as f32,
         scale: overlay.scale_factor(),
     };
-    if pet.validate() && *last != Some(pet) {
-        reporter.set(pet);
-        *last = Some(pet);
+    if pet.validate() && *last_bounds != Some(pet) {
+        if let Some(reporter) = bounds_reporter {
+            reporter.set(pet);
+        }
+        *last_bounds = Some(pet);
+    }
+    let Some(reporter) = state_reporter else {
+        return;
+    };
+    let model =
+        runtime
+            .active_model_identity()
+            .map(|(id, origin)| bongocat_plugin_service::ModelInfo {
+                id: id.as_str().to_owned(),
+                built_in: matches!(origin, bongocat_model::ModelOrigin::Preset),
+            });
+    let state = bongocat_plugin_service::PetState {
+        model,
+        visible: overlay.is_visible(),
+    };
+    if *last_state != Some(state.clone()) {
+        reporter.set(state.clone());
+        *last_state = Some(state);
     }
 }
 
@@ -418,13 +438,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // consumer end before its first tick. A store that cannot be opened is not
     // fatal — the plugin center reports it and the cat still runs.
     let plugin_storage_root = application.storage_root().to_path_buf();
-    let activity = application.runtime_client().subscribe_activity();
+    let plugin_runtime_client = application.runtime_client();
+    let activity = plugin_runtime_client.subscribe_activity();
+    let activity_client = plugin_runtime_client.clone();
     let (plugin_service, plugin_overlay_handles) =
-        match bongocat_plugin_service::PluginService::start_with_events(
+        match bongocat_plugin_service::PluginService::start_with_inputs(
             &plugin_storage_root,
             16,
             dev_plugins::source(),
-            Box::new(plugin_input::PluginActivity(activity)),
+            Some(Box::new(move || plugin_input::activity(&activity_client))),
+            Some(Box::new(plugin_input::PluginActivity(activity))),
         ) {
             Ok(started) => (Some(started.0), Some(started.1)),
             Err(error) => {
@@ -443,6 +466,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let plugin_pet_bounds = plugin_service
         .as_ref()
         .map(bongocat_plugin_service::PluginService::pet_bounds_reporter);
+    let plugin_pet_state = plugin_service
+        .as_ref()
+        .map(bongocat_plugin_service::PluginService::pet_state_reporter);
     application.install_process_panic_hook();
     let core_log = CoreLogHandle::install(
         application.logs_directory(),
@@ -1283,9 +1309,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let frame_application_log = application_log.clone();
         let frame_source_guard = frame_source_shutdown.run_guard();
         let frame_pet_bounds = plugin_pet_bounds;
+        let frame_pet_state = plugin_pet_state;
         cx.spawn(async move |cx| {
             let _frame_source_guard = frame_source_guard;
             let mut last_pet_bounds = None;
+            let mut last_pet_state = None;
             #[cfg(target_os = "windows")]
             let mut frame_active = true;
             #[cfg(target_os = "windows")]
@@ -1343,10 +1371,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .as_mut()
                             .expect("product overlay owner is present");
                         let result = overlay.tick();
-                        publish_plugin_pet_bounds(
+                        publish_plugin_companion(
                             &frame_pet_bounds,
+                            &frame_pet_state,
                             overlay,
+                            &frame_runtime_client,
                             &mut last_pet_bounds,
+                            &mut last_pet_state,
                         );
                         if context_menu_requested
                             && let Some(menu) = coordinator.system_menu.as_ref()
@@ -1433,10 +1464,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .as_mut()
                         .expect("product overlay owner is present while the frame source runs");
                     let result = overlay.tick();
-                    publish_plugin_pet_bounds(
+                    publish_plugin_companion(
                         &frame_pet_bounds,
+                        &frame_pet_state,
                         overlay,
+                        &frame_runtime_client,
                         &mut last_pet_bounds,
+                        &mut last_pet_state,
                     );
                     if result.is_ok()
                         && let Ok(bounds) = overlay.window_bounds()

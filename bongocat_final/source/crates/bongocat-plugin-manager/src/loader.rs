@@ -21,6 +21,7 @@ pub(crate) struct Process {
     icon_text: bool,
     push_output: bool,
     companion_menu: bool,
+    menu_tree: bool,
     host_bubble: bool,
 }
 impl Process {
@@ -83,6 +84,9 @@ impl Process {
             push_output: push,
             icon_text: metadata.capabilities.contains(&Capability::IconTextV1),
             companion_menu: metadata.capabilities.contains(&Capability::CompanionV1),
+            menu_tree: metadata
+                .capabilities
+                .contains(&Capability::PluginMenuTreeV1),
             host_bubble: metadata.capabilities.contains(&Capability::HostBubbleV1),
         };
         process.exchange(HostMessage::Handshake {
@@ -172,9 +176,14 @@ impl Process {
                 "plugin published undeclared icon_text_v1 nodes",
             ));
         }
-        if !self.companion_menu && !output.menu.is_empty() {
+        if !self.companion_menu && (!output.menu.is_empty() || !output.menu_tree.is_empty()) {
             return Err(io::Error::other(
                 "plugin published undeclared companion menu entries",
+            ));
+        }
+        if !self.menu_tree && !output.menu_tree.is_empty() {
+            return Err(io::Error::other(
+                "plugin published an undeclared plugin_menu_tree_v1",
             ));
         }
         if !self.host_bubble && !output.bubbles.is_empty() {

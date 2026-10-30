@@ -13,11 +13,13 @@ pnpm --dir "$Root/plugins/todo/ui" install
 pnpm --dir "$Root/plugins/todo/ui" build
 pnpm --dir "$Root/plugins/mail/ui" install
 pnpm --dir "$Root/plugins/mail/ui" build
+pnpm --dir "$Root/plugins/cyberwork/ui" install
+pnpm --dir "$Root/plugins/cyberwork/ui" build
 
 Write-Host "Building plugin executables..."
 Push-Location $Root
 try {
-  cargo build --release -p bongocat-todo -p bongocat-mail --features custom-protocol
+  cargo build --release -p bongocat-todo -p bongocat-mail -p bongocat-cyberwork --features custom-protocol
 } finally {
   Pop-Location
 }
@@ -41,7 +43,8 @@ function Package-Plugin {
   Copy-Item (Join-Path $Root "LICENSE-MIT.txt") (Join-Path $Staging "LICENSE-MIT.txt")
   Copy-Item (Join-Path $Root "OFL.txt") (Join-Path $Staging "OFL.txt")
 
-  $Manifest = Get-Content (Join-Path $Directory "plugin.json") -Raw | ConvertFrom-Json
+  $ManifestText = [System.IO.File]::ReadAllText((Join-Path $Directory "plugin.json"), [System.Text.Encoding]::UTF8)
+  $Manifest = $ManifestText | ConvertFrom-Json
   $Manifest.metadata.version = $Version
   $Manifest.metadata.icon.value = "icon.png"
   $Json = $Manifest | ConvertTo-Json -Depth 12
@@ -56,3 +59,4 @@ function Package-Plugin {
 
 Package-Plugin "com.bongocat.todo" "Todo" "bongocat-todo" (Join-Path $Root "plugins/todo")
 Package-Plugin "com.bongocat.mail" "Mail" "bongocat-mail" (Join-Path $Root "plugins/mail")
+Package-Plugin "com.bongocat.cyberwork" "Cyber Work" "bongocat-cyberwork" (Join-Path $Root "plugins/cyberwork")

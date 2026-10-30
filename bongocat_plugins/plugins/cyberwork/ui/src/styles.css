@@ -1,0 +1,32 @@
+@font-face {
+  font-family: 'Handwriting851';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jingnan-pop-black.ttf') format('truetype');
+}
+
+:root {
+  font-family: 'Handwriting851', 'Segoe UI', sans-serif;
+  color: #222;
+  background: transparent;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}

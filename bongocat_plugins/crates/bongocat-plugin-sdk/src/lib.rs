@@ -73,6 +73,51 @@ impl InputActivity {
     }
 }
 
+/// The model whose window is hosting the companion.
+///
+/// `built_in` distinguishes the application's own presets from an imported
+/// package that happens to reuse the same id: the id alone is not an identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelInfo {
+    pub id: String,
+    pub built_in: bool,
+}
+
+impl ModelInfo {
+    /// Whether this is the shipped `standard` preset.
+    pub fn is_standard(&self) -> bool {
+        self.built_in && self.id == "standard"
+    }
+
+    /// Whether this is the shipped `gamepad` preset.
+    pub fn is_gamepad(&self) -> bool {
+        self.built_in && self.id == "gamepad"
+    }
+
+    pub fn validate(&self) -> bool {
+        !self.id.trim().is_empty() && self.id.len() <= 128 && !self.id.chars().any(char::is_control)
+    }
+}
+
+/// What a companion plugin may know about the model window it sits beside.
+///
+/// `model` is `None` while the runtime has no active model, and `visible`
+/// mirrors the session's model-window visibility rather than the transparent
+/// pixels inside it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PetState {
+    pub model: Option<ModelInfo>,
+    pub visible: bool,
+}
+
+impl PetState {
+    pub fn validate(&self) -> bool {
+        self.model.as_ref().is_none_or(ModelInfo::validate)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ConfigValue {
@@ -130,6 +175,20 @@ pub enum Capability {
     /// One host queue keeps bubbles from independent plugins from overlapping;
     /// the plugin owns the text and the action, not the window.
     HostBubbleV1,
+    /// The plugin receives the active model's identity and whether the model
+    /// window is currently visible.
+    ///
+    /// This is the companion-window contract for plugins whose content depends
+    /// on the selected preset: the rectangle alone cannot tell a standard model
+    /// from a gamepad one, because the built-in presets share one canvas size.
+    PetStateV1,
+    /// The plugin may publish a bounded tree of companion menu entries with
+    /// nested submenus and checked leaves.
+    ///
+    /// The flat [`PluginOutput::menu`] list remains the shape every existing
+    /// plugin uses; a plugin that needs grouping opts in here rather than making
+    /// the host infer a tree from labels.
+    PluginMenuTreeV1,
 }
 
 /// Privacy-bounded sound groups; ordinary keyboard keys share one identity.
@@ -617,6 +676,24 @@ pub struct PluginMenuItem {
     pub label: String,
 }
 
+/// One node of the bounded companion menu tree.
+///
+/// A node with `children` is a submenu and has no action of its own; a leaf is
+/// an action whose `checked` state, when present, the host draws as a check
+/// mark. The tree exists because a flat list cannot express a scale submenu and
+/// its mutually exclusive values without the host inventing semantics from a
+/// label.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginMenuNode {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<PluginMenuNode>,
+}
+
 /// The closed set of hand-drawn bubble artwork the host owns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -676,6 +753,16 @@ pub enum HostMessage {
         elapsed_ms: u64,
         activity: InputActivity,
     },
+    /// The active model and whether its window is visible.
+    ///
+    /// Delivered only to plugins that declare [`Capability::PetStateV1`], after
+    /// Start and whenever the model or visibility changes. The same data is
+    /// deliberately not folded into [`HostMessage::PetBounds`]: a plugin built
+    /// against the flat companion contract must keep parsing every frame it can
+    /// receive.
+    PetState {
+        state: PetState,
+    },
     Action {
         id: String,
     },
@@ -720,6 +807,13 @@ pub struct PluginOutput {
     /// Companion menu entries, allowed only with [`Capability::CompanionV1`].
     #[serde(default)]
     pub menu: Vec<PluginMenuItem>,
+    /// Nested companion menu entries, allowed only with
+    /// [`Capability::CompanionV1`] and [`Capability::PluginMenuTreeV1`].
+    ///
+    /// When non-empty this supersedes [`Self::menu`]; the flat list exists so a
+    /// plugin without the tree capability keeps working unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub menu_tree: Vec<PluginMenuNode>,
     /// Recent bubbles, allowed only with [`Capability::HostBubbleV1`].
     #[serde(default)]
     pub bubbles: Vec<PluginBubble>,
@@ -727,6 +821,14 @@ pub struct PluginOutput {
 
 /// How many companion menu entries one plugin may publish.
 pub const PLUGIN_MENU_LIMIT: usize = 8;
+/// How many nodes one [`PluginOutput::menu_tree`] may contain across all levels.
+pub const PLUGIN_MENU_NODE_LIMIT: usize = 32;
+/// How many levels a [`PluginOutput::menu_tree`] may have.
+///
+/// Two is the shape a companion needs: a submenu under the host's plugin menu
+/// and one nested group such as a scale list. Deeper nesting is a catalog, not a
+/// companion menu.
+pub const PLUGIN_MENU_DEPTH_LIMIT: usize = 2;
 /// How many bubbles one plugin may publish in one output.
 pub const PLUGIN_BUBBLE_LIMIT: usize = 4;
 /// The longest auto-dismiss delay a bubble may request.
@@ -767,6 +869,7 @@ impl PluginOutput {
                     }
             })
             && validate_menu(&self.menu)
+            && validate_menu_tree(&self.menu_tree)
             && validate_bubbles(&self.bubbles)
     }
 }
@@ -781,6 +884,39 @@ fn validate_menu(menu: &[PluginMenuItem]) -> bool {
         && menu
             .iter()
             .all(|item| ids.insert(&item.id) && valid_key(&item.id) && valid_text(&item.label, 128))
+}
+
+fn validate_menu_tree(menu: &[PluginMenuNode]) -> bool {
+    menu.len() <= PLUGIN_MENU_LIMIT
+        && count_menu_nodes(menu, 1).is_some_and(|count| count <= PLUGIN_MENU_NODE_LIMIT)
+}
+
+/// Count a node list and every descendant, rejecting any shape the host cannot
+/// draw as a bounded plugin menu.
+fn count_menu_nodes(nodes: &[PluginMenuNode], depth: usize) -> Option<usize> {
+    if depth > PLUGIN_MENU_DEPTH_LIMIT {
+        return None;
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut total = 0usize;
+    for node in nodes {
+        if !valid_key(&node.id) || !valid_text(&node.label, 128) || !ids.insert(&node.id) {
+            return None;
+        }
+        if node.children.is_empty() {
+            total += 1;
+        } else {
+            // A parent opens a submenu; a check state belongs to an action leaf.
+            if node.checked.is_some() {
+                return None;
+            }
+            total += 1 + count_menu_nodes(&node.children, depth + 1)?;
+        }
+        if total > PLUGIN_MENU_NODE_LIMIT {
+            return None;
+        }
+    }
+    Some(total)
 }
 
 fn validate_bubbles(bubbles: &[PluginBubble]) -> bool {

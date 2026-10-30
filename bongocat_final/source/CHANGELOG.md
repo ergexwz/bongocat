@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### ✨ Features
+
+- Added nested companion-plugin menus, pet model/visibility messages and anonymous input-activity support for the Cyber Work counter.
+
 ### 🐛 Bug Fixes
 
 - Fixed the Windows login startup task continuing to launch an old executable after the application folder moved.

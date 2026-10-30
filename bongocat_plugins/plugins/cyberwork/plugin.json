@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "com.bongocat.cyberwork",
+    "name": "Cyber Work",
+    "description": "A hover-revealed key/mouse tap counter and gamepad time tracker above your pet, with scaling and usage history.",
+    "version": "0.1.0",
+    "app_versions": ">=2.5.0",
+    "protocol_version": 1,
+    "entry": "bongocat-cyberwork",
+    "icon": {
+      "type": "local_image",
+      "value": "resources/icon.png"
+    },
+    "capabilities": [
+      "companion_v1",
+      "localized_views_v1",
+      "input_activity_v1",
+      "pet_state_v1",
+      "plugin_menu_tree_v1"
+    ],
+    "localizations": {
+      "zh-CN": {
+        "name": "赛博打工",
+        "description": "桌宠头顶的键鼠敲击计数器与 gamepad 游戏时长记录，支持缩放和使用历史。"
+      }
+    }
+  }
+}

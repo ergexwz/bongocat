@@ -20,7 +20,8 @@ use bongocat_plugin_manager::{
     AvailablePlugin, PluginManager, PluginManagerError, PluginSource, PluginState, RegistryError,
 };
 use bongocat_plugin_sdk::{
-    ConfigValue, InputActivity, PetBounds, PluginBubble, PluginOutput, UiNode,
+    ConfigValue, InputActivity, PetBounds, PetState, PluginBubble, PluginMenuNode, PluginOutput,
+    UiNode,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -35,11 +36,59 @@ use std::{
 };
 
 /// One plugin-owned entry in the host's companion menu.
+///
+/// A node with `children` is a submenu and has no action; a leaf carries the
+/// action id the host sends back, and an optional check state for radio-style
+/// choices such as the counter's scale.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompanionMenuItem {
     pub plugin: String,
-    pub action: String,
+    pub action: Option<String>,
     pub label: String,
+    pub checked: Option<bool>,
+    pub children: Vec<CompanionMenuItem>,
+}
+
+/// Turn one plugin's menu publication into the tree the host renders.
+///
+/// The flat list stays the compatibility path; a plugin that declares
+/// `plugin_menu_tree_v1` publishes the richer shape and this is where it
+/// replaces the flat entries.
+fn companion_menu(plugin: &str, output: &PluginOutput) -> Vec<CompanionMenuItem> {
+    if output.menu_tree.is_empty() {
+        output
+            .menu
+            .iter()
+            .map(|item| CompanionMenuItem {
+                plugin: plugin.to_owned(),
+                action: Some(item.id.clone()),
+                label: item.label.clone(),
+                checked: None,
+                children: Vec::new(),
+            })
+            .collect()
+    } else {
+        output
+            .menu_tree
+            .iter()
+            .map(|node| companion_menu_node(plugin, node))
+            .collect()
+    }
+}
+
+fn companion_menu_node(plugin: &str, node: &PluginMenuNode) -> CompanionMenuItem {
+    let children = node
+        .children
+        .iter()
+        .map(|child| companion_menu_node(plugin, child))
+        .collect::<Vec<_>>();
+    CompanionMenuItem {
+        plugin: plugin.to_owned(),
+        action: children.is_empty().then(|| node.id.clone()),
+        label: node.label.clone(),
+        checked: node.checked,
+        children,
+    }
 }
 
 /// One bubble waiting for the host's shared notification window.
@@ -68,6 +117,33 @@ impl PetBoundsReporter {
             .slot
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// A cheap, cloneable writer for the active model and model-window visibility.
+///
+/// It is separate from [`PetBoundsReporter`] because visibility changes without
+/// the rectangle moving (the tray can hide the model window in place), and a
+/// companion that only watched the rectangle would keep showing its window over
+/// an invisible pet.
+#[derive(Clone, Default)]
+pub struct PetStateReporter {
+    slot: Arc<RwLock<Option<PetState>>>,
+}
+
+impl PetStateReporter {
+    pub fn set(&self, state: PetState) {
+        *self
+            .slot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state);
+    }
+
+    pub fn get(&self) -> Option<PetState> {
+        self.slot
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -104,6 +180,7 @@ pub struct PluginService {
     menu_items: Arc<RwLock<Vec<CompanionMenuItem>>>,
     bubbles: Arc<Mutex<Vec<QueuedPluginBubble>>>,
     pet_bounds: Arc<RwLock<Option<PetBounds>>>,
+    pet_state: Arc<RwLock<Option<PetState>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,7 +228,14 @@ impl PluginService {
         Self::start_with_inputs(storage_root, capacity, source, None, Some(events))
     }
 
-    fn start_with_inputs(
+    /// Start the service with both input sources.
+    ///
+    /// The product passes both an absolute counter source and the ordered event
+    /// feed: existing plugins declare whichever capability they parse, and the
+    /// service never sends a capability-gated frame to a plugin that did not ask
+    /// for it. Companion bounds and state are published through their reporters
+    /// after start.
+    pub fn start_with_inputs(
         storage_root: &Path,
         capacity: usize,
         source: PluginSource,
@@ -167,10 +251,12 @@ impl PluginService {
         let menu_items = Arc::new(RwLock::new(Vec::new()));
         let bubbles = Arc::new(Mutex::new(Vec::new()));
         let pet_bounds = Arc::new(RwLock::new(None));
+        let pet_state = Arc::new(RwLock::new(None));
         let worker_stop = Arc::clone(&stop);
         let worker_menu = Arc::clone(&menu_items);
         let worker_bubbles = Arc::clone(&bubbles);
         let worker_pet_bounds = Arc::clone(&pet_bounds);
+        let worker_pet_state = Arc::clone(&pet_state);
         let worker = thread::Builder::new()
             .name("bongocat-plugin-service".to_owned())
             .spawn(move || {
@@ -190,6 +276,7 @@ impl PluginService {
                         menu_items: worker_menu,
                         bubbles: worker_bubbles,
                         pet_bounds: worker_pet_bounds,
+                        pet_state: worker_pet_state,
                     },
                 )
             })
@@ -202,6 +289,7 @@ impl PluginService {
                 menu_items,
                 bubbles,
                 pet_bounds,
+                pet_state,
             },
             PluginOverlayHandles {
                 hud_consumer,
@@ -249,6 +337,14 @@ impl PluginService {
         }
     }
 
+    /// The writer the product frame loop uses to publish the active model and
+    /// model-window visibility.
+    pub fn pet_state_reporter(&self) -> PetStateReporter {
+        PetStateReporter {
+            slot: Arc::clone(&self.pet_state),
+        }
+    }
+
     /// Ask the worker to stop and wait for it to have stopped.
     ///
     /// Every plugin process is joined before this returns, which is what makes
@@ -286,6 +382,7 @@ struct CompanionSinks {
     menu_items: Arc<RwLock<Vec<CompanionMenuItem>>>,
     bubbles: Arc<Mutex<Vec<QueuedPluginBubble>>>,
     pet_bounds: Arc<RwLock<Option<PetBounds>>>,
+    pet_state: Arc<RwLock<Option<PetState>>>,
 }
 
 /// The worker's whole state.
@@ -319,6 +416,7 @@ struct Worker {
     shutdown_reply: Option<PluginReply<()>>,
     companion: CompanionSinks,
     last_pet_bounds: Option<PetBounds>,
+    last_pet_state: Option<PetState>,
     seen_bubbles: BTreeMap<String, BTreeSet<String>>,
 }
 
@@ -420,6 +518,7 @@ fn run(
         shutdown_reply: None,
         companion,
         last_pet_bounds: None,
+        last_pet_state: None,
         seen_bubbles: BTreeMap::new(),
     };
     worker.initialize_running_input_activity();
@@ -516,8 +615,9 @@ impl Worker {
     }
 
     /// Publish the newest companion menu, queue unseen bubbles and forward the
-    /// model window rectangle. Menu and bubble reads are cheap: two plugins and
-    /// bounded outputs, once per service loop.
+    /// model window rectangle, active model and visibility. Menu and bubble
+    /// reads are cheap: a few plugins and bounded outputs, once per service
+    /// loop.
     fn publish_companion(&mut self) {
         let mut menu = Vec::new();
         let mut arrivals = Vec::new();
@@ -528,13 +628,7 @@ impl Worker {
             let Some(output) = self.manager.plugin_output(&metadata.id).cloned() else {
                 continue;
             };
-            for item in &output.menu {
-                menu.push(CompanionMenuItem {
-                    plugin: metadata.id.clone(),
-                    action: item.id.clone(),
-                    label: item.label.clone(),
-                });
-            }
+            menu.extend(companion_menu(&metadata.id, &output));
             let seen = self.seen_bubbles.entry(metadata.id.clone()).or_default();
             for bubble in &output.bubbles {
                 if seen.insert(bubble.id.clone()) {
@@ -583,6 +677,18 @@ impl Worker {
         {
             self.manager.pet_bounds(bounds);
             self.last_pet_bounds = Some(bounds);
+        }
+        let pet_state = self
+            .companion
+            .pet_state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(state) = pet_state
+            && self.last_pet_state.as_ref() != Some(&state)
+        {
+            self.manager.pet_state(state.clone());
+            self.last_pet_state = Some(state);
         }
     }
 
@@ -702,6 +808,7 @@ impl Worker {
             }
             self.initialize_plugin_input_activity(&offer.metadata.id);
             self.last_pet_bounds = None;
+            self.last_pet_state = None;
         }
     }
 
@@ -971,6 +1078,7 @@ impl Worker {
                 if result.is_ok() && enabled {
                     self.initialize_plugin_input_activity(&id);
                     self.last_pet_bounds = None;
+                    self.last_pet_state = None;
                 }
                 if result.is_ok() && !enabled {
                     self.clear_plugin_bubbles(&id);
@@ -1029,6 +1137,7 @@ impl Worker {
                             Ok(()) => {
                                 self.initialize_plugin_input_activity(&id);
                                 self.last_pet_bounds = None;
+                                self.last_pet_state = None;
                                 Ok(())
                             }
                             Err(error) => {
@@ -1068,6 +1177,7 @@ impl Worker {
                 if result.is_ok() {
                     self.clear_plugin_bubbles(&id);
                     self.last_pet_bounds = None;
+                    self.last_pet_state = None;
                 }
                 self.respond(reply, result);
             }
@@ -1358,10 +1468,49 @@ mod tests {
                 menu_items: Arc::new(RwLock::new(Vec::new())),
                 bubbles: Arc::new(Mutex::new(Vec::new())),
                 pet_bounds: Arc::new(RwLock::new(None)),
+                pet_state: Arc::new(RwLock::new(None)),
             },
             last_pet_bounds: None,
+            last_pet_state: None,
             seen_bubbles: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn companion_menu_uses_the_tree_when_published_and_keeps_the_flat_fallback() {
+        let flat = PluginOutput {
+            menu: vec![bongocat_plugin_sdk::PluginMenuItem {
+                id: "open".into(),
+                label: "Open".into(),
+            }],
+            ..Default::default()
+        };
+        let items = companion_menu("com.bongocat.test", &flat);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].action.as_deref(), Some("open"));
+        assert!(items[0].children.is_empty());
+        assert_eq!(items[0].checked, None);
+
+        let tree = PluginOutput {
+            menu_tree: vec![PluginMenuNode {
+                id: "scale".into(),
+                label: "Scale".into(),
+                checked: None,
+                children: vec![PluginMenuNode {
+                    id: "scale-40".into(),
+                    label: "40%".into(),
+                    checked: Some(true),
+                    children: Vec::new(),
+                }],
+            }],
+            ..Default::default()
+        };
+        let items = companion_menu("com.bongocat.test", &tree);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].action, None);
+        assert_eq!(items[0].children.len(), 1);
+        assert_eq!(items[0].children[0].action.as_deref(), Some("scale-40"));
+        assert_eq!(items[0].children[0].checked, Some(true));
     }
 
     #[test]

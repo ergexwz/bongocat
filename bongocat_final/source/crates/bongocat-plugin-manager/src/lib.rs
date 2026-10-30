@@ -178,6 +178,11 @@ impl PluginManager {
     pub fn pet_bounds(&mut self, bounds: bongocat_plugin_sdk::PetBounds) {
         self.registry.pet_bounds(bounds);
     }
+    /// Hand every running companion the active model and model-window
+    /// visibility when either changed.
+    pub fn pet_state(&mut self, state: bongocat_plugin_sdk::PetState) {
+        self.registry.pet_state(state);
+    }
     /// Establish the cumulative input baseline for a plugin that just started.
     pub fn initialize_input_activity(
         &mut self,

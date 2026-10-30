@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BongoCat Cyber Work",
+  "version": "0.1.0",
+  "identifier": "com.bongocat.cyberwork",
+  "build": {
+    "frontendDist": "ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "counter",
+        "title": "Cyber Work Counter",
+        "url": "index.html?view=counter",
+        "visible": false,
+        "width": 340,
+        "height": 98,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false,
+        "focusable": false
+      },
+      {
+        "label": "history",
+        "title": "Cyber Work History",
+        "url": "index.html?view=history",
+        "visible": false,
+        "width": 500,
+        "height": 580,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.ico"
+    ]
+  }
+}
