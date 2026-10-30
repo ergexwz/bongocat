@@ -30,6 +30,7 @@ fn main() {
             mail::mail_archive,
             mail::mail_delete_notification,
             mail::mail_set_settings,
+            mail::mail_set_ui_scale,
             mail::mail_test_connection,
             mail::mail_add_account,
             mail::mail_set_enabled,

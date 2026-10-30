@@ -80,7 +80,11 @@ const zhCN = {
         "bubbleAutoDismissDesc": "关闭后气泡常驻直到点击",
         "unreadOnlyTitle": "仅未读邮件提醒",
         "unreadOnlyDesc": "忽略已读邮件（通常应开启）",
-        "invalidPort": "端口必须是 1-65535 的整数"
+        "invalidPort": "端口必须是 1-65535 的整数",
+        "zoomIn": "放大",
+        "zoomOut": "缩小",
+        "zoomReset": "重置缩放",
+        "resizeHandle": "拖动缩放"
       }
     }
   }
@@ -166,7 +170,11 @@ const enUS = {
         "bubbleAutoDismissDesc": "When off, bubble stays until clicked",
         "unreadOnlyTitle": "Unread mail only",
         "unreadOnlyDesc": "Ignore read mail (usually on)",
-        "invalidPort": "Port must be an integer between 1 and 65535"
+        "invalidPort": "Port must be an integer between 1 and 65535",
+        "zoomIn": "Zoom in",
+        "zoomOut": "Zoom out",
+        "zoomReset": "Reset zoom",
+        "resizeHandle": "Drag to resize"
       }
     }
   }

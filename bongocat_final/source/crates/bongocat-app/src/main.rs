@@ -366,6 +366,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if run_options.startup_permission_smoke {
         return smoke::run_startup_permission_smoke();
     }
+    // A portable installation can move between releases. Keep an already
+    // enabled login task pointed at this executable, before the single-instance
+    // check, so a freshly downloaded copy can repair the registration even
+    // while an older copy is still running. A missing or disabled task stays
+    // untouched: enabling login startup remains an explicit user action.
+    #[cfg(target_os = "windows")]
+    let startup_item_reconciliation = if bongocat_app::BUILD_ENVIRONMENT
+        == bongocat_config::BuildEnvironment::Production
+        && !run_options.automated_verification()
+    {
+        Some(bongocat_platform::reconcile_startup_item(
+            bongocat_platform::StartupItemEnvironment::Production,
+        ))
+    } else {
+        None
+    };
     #[cfg(target_os = "windows")]
     let single_instance = match SingleInstance::acquire(build_single_instance_environment())? {
         SingleInstanceStart::Primary(single_instance) => single_instance,
@@ -380,6 +396,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut application = bongocat_app::Application::start(preset_root())?;
     let application_log = application.log_handle();
+    #[cfg(target_os = "windows")]
+    match startup_item_reconciliation {
+        Some(Ok(true)) => application.record_log_once(
+            ApplicationLogEvent::new(ApplicationLogCode::ServiceRecovered)
+                .with_context(ApplicationLogContext::Service("startup_item"))
+                .with_context(ApplicationLogContext::Reason("startup_item_target_updated")),
+        ),
+        Some(Err(error)) => application.record_log_once(
+            ApplicationLogEvent::new(ApplicationLogCode::ServiceDegraded)
+                .with_context(ApplicationLogContext::Service("startup_item"))
+                .with_context(ApplicationLogContext::Reason(
+                    "startup_item_target_update_failed",
+                ))
+                .with_context(ApplicationLogContext::State(error.as_str())),
+        ),
+        _ => {}
+    }
     // The plugin service starts before the overlay, because the overlay is what
     // draws the layer the service composes: the window has to be handed the
     // consumer end before its first tick. A store that cannot be opened is not

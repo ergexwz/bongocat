@@ -16,6 +16,13 @@ version\BongoCat_2.5.0\BongoCat.exe
 
 Requirements: Windows 10 1903+ x64.
 
+### Run at startup
+
+The Windows login task records the absolute path of the executable that enabled
+it. Starting the app once as administrator after moving the folder rewrites the
+task to the new path; if the settings page reports that the app location changed,
+toggling the switch once repairs it. A failed rewrite never blocks startup.
+
 ## 2. `bongocat_final/` — development build and full source
 
 Locally built BongoCat 2.5.0 (based on upstream 2.4.0) with the Xbox/XInput

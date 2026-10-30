@@ -28,3 +28,16 @@ export interface MailSettings {
   bubbleAutoDismiss: boolean
   unreadOnly: boolean
 }
+
+export interface MailUiSettings {
+  listScale: number
+  archiveScale: number
+  settingsScale: number
+}
+
+export interface MailSnapshot {
+  accounts: MailAccount[]
+  notifications: MailNotification[]
+  settings: MailSettings
+  ui: MailUiSettings
+}

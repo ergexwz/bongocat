@@ -20,6 +20,8 @@ use manager::{
 const KEYRING_PREFIX: &str = "com.bongocat.mail";
 const MAX_ACCOUNTS: usize = 16;
 const MAX_NOTIFICATIONS: usize = 500;
+const MIN_UI_SCALE: f64 = 0.8;
+const MAX_UI_SCALE: f64 = 1.5;
 const UNREAD_ARCHIVE_MS: i64 = 24 * 60 * 60 * 1000;
 const READ_ARCHIVE_MS: i64 = 5 * 60 * 1000;
 const ARCHIVE_PURGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
@@ -72,6 +74,50 @@ impl Default for MailSettings {
     }
 }
 
+fn default_ui_scale() -> f64 {
+    1.0
+}
+
+/// Per-window scale for the three scrollable mail panels.
+///
+/// The values are camelCase on disk so the UI can return the same snapshot it
+/// read. Each panel keeps its own scale because the list, archive and settings
+/// windows are opened independently.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailUiSettings {
+    #[serde(default = "default_ui_scale")]
+    pub list_scale: f64,
+    #[serde(default = "default_ui_scale")]
+    pub archive_scale: f64,
+    #[serde(default = "default_ui_scale")]
+    pub settings_scale: f64,
+}
+
+impl Default for MailUiSettings {
+    fn default() -> Self {
+        Self {
+            list_scale: default_ui_scale(),
+            archive_scale: default_ui_scale(),
+            settings_scale: default_ui_scale(),
+        }
+    }
+}
+
+fn normalize_ui_scale(scale: f64) -> Result<f64, String> {
+    if !scale.is_finite() {
+        return Err("mail ui scale is invalid".into());
+    }
+    Ok(scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE))
+}
+
+fn sanitize_ui_settings(mut ui: MailUiSettings) -> MailUiSettings {
+    ui.list_scale = normalize_ui_scale(ui.list_scale).unwrap_or(1.0);
+    ui.archive_scale = normalize_ui_scale(ui.archive_scale).unwrap_or(1.0);
+    ui.settings_scale = normalize_ui_scale(ui.settings_scale).unwrap_or(1.0);
+    ui
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MailFile {
@@ -80,6 +126,8 @@ struct MailFile {
     notifications: Vec<MailNotification>,
     #[serde(default)]
     settings: MailSettings,
+    #[serde(default)]
+    ui: MailUiSettings,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -88,6 +136,7 @@ pub struct MailSnapshot {
     pub accounts: Vec<MailAccount>,
     pub notifications: Vec<MailNotification>,
     pub settings: MailSettings,
+    pub ui: MailUiSettings,
 }
 
 pub struct MailStore {
@@ -95,17 +144,26 @@ pub struct MailStore {
     accounts: Vec<MailAccount>,
     notifications: Vec<MailNotification>,
     settings: MailSettings,
+    ui: MailUiSettings,
 }
 
 impl MailStore {
     pub fn load(data_dir: &Path) -> Arc<Mutex<Self>> {
         let path = data_dir.join("mail.json");
         let file = read_json::<MailFile>(&path).ok().flatten();
-        let (mut accounts, notifications, settings) = match file {
-            Some(file) if file.schema_version == 1 => {
-                (file.accounts, file.notifications, file.settings)
-            }
-            _ => (Vec::new(), Vec::new(), MailSettings::default()),
+        let (mut accounts, notifications, settings, ui) = match file {
+            Some(file) if file.schema_version == 1 => (
+                file.accounts,
+                file.notifications,
+                file.settings,
+                sanitize_ui_settings(file.ui),
+            ),
+            _ => (
+                Vec::new(),
+                Vec::new(),
+                MailSettings::default(),
+                MailUiSettings::default(),
+            ),
         };
         for account in &mut accounts {
             account.status = "idle".into();
@@ -115,19 +173,26 @@ impl MailStore {
             accounts,
             notifications,
             settings,
+            ui,
         }))
     }
 
     fn persist(&self) {
-        let _ = write_json(
+        let _ = self.persist_result();
+    }
+
+    fn persist_result(&self) -> Result<(), String> {
+        write_json(
             &self.path,
             &MailFile {
                 schema_version: 1,
                 accounts: self.accounts.clone(),
                 notifications: self.notifications.clone(),
                 settings: self.settings.clone(),
+                ui: self.ui.clone(),
             },
-        );
+        )
+        .map_err(|_| "mail data could not be saved".to_owned())
     }
 
     fn snapshot(&self) -> MailSnapshot {
@@ -135,7 +200,24 @@ impl MailStore {
             accounts: self.accounts.clone(),
             notifications: self.notifications.clone(),
             settings: self.settings.clone(),
+            ui: self.ui.clone(),
         }
+    }
+
+    fn set_ui_scale(&mut self, view: &str, scale: f64) -> Result<(), String> {
+        let scale = normalize_ui_scale(scale)?;
+        let previous = self.ui.clone();
+        match view {
+            "mail-list" => self.ui.list_scale = scale,
+            "mail-archive" => self.ui.archive_scale = scale,
+            "mail-settings" => self.ui.settings_scale = scale,
+            _ => return Err("mail ui view is invalid".into()),
+        }
+        if let Err(error) = self.persist_result() {
+            self.ui = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn record_new(&mut self, payload: &NewMailPayload) -> bool {
@@ -395,6 +477,7 @@ impl CompanionState for MailState {
         store.accounts.clear();
         store.notifications.clear();
         store.settings = MailSettings::default();
+        store.ui = MailUiSettings::default();
         store.persist();
         drop(store);
         self.ui.emit(UiEvent::StateChanged);
@@ -592,6 +675,24 @@ pub fn mail_set_settings(
     drop(store);
     let _ = app.emit("mail://state", ());
     snapshot
+}
+
+#[tauri::command]
+pub fn mail_set_ui_scale(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    view: String,
+    scale: f64,
+) -> Result<MailSnapshot, String> {
+    let mut store = state
+        .store
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    store.set_ui_scale(&view, scale)?;
+    let snapshot = store.snapshot();
+    drop(store);
+    let _ = app.emit("mail://state", ());
+    Ok(snapshot)
 }
 
 #[derive(Deserialize)]
@@ -854,4 +955,49 @@ pub fn get_locale(state: State<'_, AppState>) -> String {
 #[tauri::command]
 pub fn mail_password_exists(account_id: String, username: String) -> bool {
     account_password(&account_id, &username).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lock(store: &Arc<Mutex<MailStore>>) -> std::sync::MutexGuard<'_, MailStore> {
+        store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn ui_scale_is_normalized() {
+        assert_eq!(normalize_ui_scale(1.25), Ok(1.25));
+        assert_eq!(normalize_ui_scale(0.1), Ok(MIN_UI_SCALE));
+        assert_eq!(normalize_ui_scale(9.0), Ok(MAX_UI_SCALE));
+        assert!(normalize_ui_scale(f64::NAN).is_err());
+        assert!(normalize_ui_scale(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn old_mail_data_defaults_ui_and_persists_the_selected_scale() {
+        let directory =
+            std::env::temp_dir().join(format!("bongocat-mail-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        std::fs::write(
+            directory.join("mail.json"),
+            r#"{"schemaVersion":1,"accounts":[],"notifications":[],"settings":{"proxy":"","bubbleEnabled":true,"bubbleAutoDismiss":false,"unreadOnly":false}}"#,
+        )
+        .expect("old mail.json");
+        let store = MailStore::load(&directory);
+        {
+            let mut store = lock(&store);
+            assert_eq!(store.snapshot().ui.list_scale, 1.0);
+            store
+                .set_ui_scale("mail-list", 1.25)
+                .expect("ui scale is persisted");
+            assert_eq!(store.snapshot().ui.list_scale, 1.25);
+            assert!(store.set_ui_scale("bubble", 1.0).is_err());
+        }
+        let reloaded = MailStore::load(&directory);
+        assert_eq!(lock(&reloaded).snapshot().ui.list_scale, 1.25);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 }
