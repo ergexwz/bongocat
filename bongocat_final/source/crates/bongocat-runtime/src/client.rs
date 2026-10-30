@@ -6,6 +6,7 @@
 
 use crate::transport::{Producer, ShutdownDiagnosticsCounters, sequence_reached};
 use crate::*;
+use bongocat_model::{ModelId, ModelOrigin};
 
 #[derive(Clone)]
 pub struct RuntimeClient {
@@ -55,6 +56,23 @@ impl RuntimeClient {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .input
             .diagnostics
+    }
+
+    /// The active model's id and storage origin, without copying the snapshot.
+    ///
+    /// The companion plugin publisher polls this beside the model window
+    /// rectangle; cloning a whole [`RuntimeSnapshot`] per frame would copy the
+    /// model name and behavior list for two small fields.
+    pub fn active_model_identity(&self) -> Option<(ModelId, ModelOrigin)> {
+        let snapshot = self
+            .snapshot
+            .value
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some((
+            snapshot.active_model.as_ref()?.id.clone(),
+            snapshot.active_model_origin?,
+        ))
     }
 
     pub fn input_producer(&self) -> InputProducer {

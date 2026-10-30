@@ -1,13 +1,14 @@
 use crate::{SystemMenuAction, SystemMenuError, SystemMenuPresentation};
 use image::ImageReader;
 use muda::{
-    CheckMenuItem, ContextMenu, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem,
-    Submenu,
+    CheckMenuItem, ContextMenu, IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, MenuItemKind,
+    PredefinedMenuItem, Submenu,
 };
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
+    collections::BTreeMap,
     io::Cursor,
     sync::mpsc::{self, Receiver, Sender},
 };
@@ -47,8 +48,8 @@ pub struct SystemMenu {
     menu: Menu,
     model_window: Submenu,
     plugin_menu: Submenu,
-    plugin_items: Vec<MenuItem>,
-    plugin_actions: Vec<(String, String)>,
+    plugin_items: Vec<MenuItemKind>,
+    plugin_actions: BTreeMap<String, (String, String)>,
     items: NativeMenuItems,
     #[cfg(target_os = "windows")]
     tray_icon_id: TrayIconId,
@@ -201,7 +202,7 @@ impl SystemMenu {
             true,
         );
         let mut plugin_items = Vec::new();
-        let mut plugin_actions = Vec::new();
+        let mut plugin_actions = BTreeMap::new();
         sync_plugin_items(
             &plugin_menu,
             &mut plugin_items,
@@ -291,14 +292,10 @@ impl SystemMenu {
     }
 
     fn action_for_menu_id(&self, id: &MenuId) -> Option<SystemMenuAction> {
-        if let Some(index) =
-            id.0.strip_prefix(PLUGIN_ITEM_PREFIX)
-                .and_then(|value| value.parse::<usize>().ok())
-                .and_then(|index| self.plugin_actions.get(index))
-        {
+        if let Some((plugin, action)) = self.plugin_actions.get(&id.0) {
             return Some(SystemMenuAction::Plugin {
-                plugin: index.0.clone(),
-                action: index.1.clone(),
+                plugin: plugin.clone(),
+                action: action.clone(),
             });
         }
         action_for_menu_id(id)
@@ -409,39 +406,137 @@ impl Drop for SystemMenu {
 
 fn sync_plugin_items(
     menu: &Submenu,
-    current: &mut Vec<MenuItem>,
-    actions: &mut Vec<(String, String)>,
+    current: &mut Vec<MenuItemKind>,
+    actions: &mut BTreeMap<String, (String, String)>,
     presentation: &SystemMenuPresentation,
 ) -> Result<(), SystemMenuError> {
     for item in current.drain(..) {
-        let _ = menu.remove(&item);
+        remove_plugin_menu_item(menu, item);
     }
     actions.clear();
+    let mut next_id = 0u64;
     if presentation.plugin_items.is_empty() {
         let empty = MenuItem::with_id(
-            MenuId::new(format!("{PLUGIN_ITEM_PREFIX}empty")),
+            plugin_menu_id(&mut next_id),
             &presentation.plugins_empty,
             false,
             None,
         );
         menu.append(&empty)
             .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
-        current.push(empty);
+        current.push(MenuItemKind::MenuItem(empty));
         return Ok(());
     }
-    for (index, item) in presentation.plugin_items.iter().enumerate() {
-        let menu_item = MenuItem::with_id(
-            MenuId::new(format!("{PLUGIN_ITEM_PREFIX}{index}")),
-            &item.label,
-            true,
-            None,
-        );
-        menu.append(&menu_item)
-            .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
-        current.push(menu_item);
-        actions.push((item.plugin.clone(), item.action.clone()));
+    for item in &presentation.plugin_items {
+        if item.children.is_empty() {
+            let action = item
+                .action
+                .clone()
+                .ok_or(SystemMenuError::MenuItemCreateFailed)?;
+            let id = plugin_menu_id(&mut next_id);
+            let kind = match item.checked {
+                Some(checked) => MenuItemKind::Check(CheckMenuItem::with_id(
+                    id.clone(),
+                    &item.label,
+                    true,
+                    checked,
+                    None,
+                )),
+                None => {
+                    MenuItemKind::MenuItem(MenuItem::with_id(id.clone(), &item.label, true, None))
+                }
+            };
+            append_plugin_kind(menu, &kind)?;
+            actions.insert(id.0, (item.plugin.clone(), action));
+            current.push(kind);
+        } else {
+            let submenu = Submenu::with_id(plugin_menu_id(&mut next_id), &item.label, true);
+            append_plugin_children(&submenu, &item.children, actions, &mut next_id)?;
+            menu.append(&submenu)
+                .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
+            current.push(MenuItemKind::Submenu(submenu));
+        }
     }
     Ok(())
+}
+
+/// Fill one plugin's submenu. A child that itself has children opens another
+/// submenu; the tree depth is already bounded by the protocol.
+fn append_plugin_children(
+    parent: &Submenu,
+    items: &[crate::SystemMenuPluginItem],
+    actions: &mut BTreeMap<String, (String, String)>,
+    next_id: &mut u64,
+) -> Result<(), SystemMenuError> {
+    for item in items {
+        let id = plugin_menu_id(next_id);
+        if item.children.is_empty() {
+            let action = item
+                .action
+                .clone()
+                .ok_or(SystemMenuError::MenuItemCreateFailed)?;
+            match item.checked {
+                Some(checked) => {
+                    let entry =
+                        CheckMenuItem::with_id(id.clone(), &item.label, true, checked, None);
+                    parent
+                        .append(&entry)
+                        .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
+                }
+                None => {
+                    let entry = MenuItem::with_id(id.clone(), &item.label, true, None);
+                    parent
+                        .append(&entry)
+                        .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
+                }
+            }
+            actions.insert(id.0, (item.plugin.clone(), action));
+        } else {
+            let submenu = Submenu::with_id(id, &item.label, true);
+            append_plugin_children(&submenu, &item.children, actions, next_id)?;
+            parent
+                .append(&submenu)
+                .map_err(|_| SystemMenuError::MenuItemCreateFailed)?;
+        }
+    }
+    Ok(())
+}
+
+fn plugin_menu_id(next_id: &mut u64) -> MenuId {
+    let index = *next_id;
+    *next_id += 1;
+    MenuId::new(format!("{PLUGIN_ITEM_PREFIX}{index}"))
+}
+
+fn append_plugin_kind(parent: &Submenu, kind: &MenuItemKind) -> Result<(), SystemMenuError> {
+    let result = match kind {
+        MenuItemKind::MenuItem(item) => parent.append(item),
+        MenuItemKind::Submenu(item) => parent.append(item),
+        MenuItemKind::Predefined(item) => parent.append(item),
+        MenuItemKind::Check(item) => parent.append(item),
+        MenuItemKind::Icon(item) => parent.append(item),
+    };
+    result.map_err(|_| SystemMenuError::MenuItemCreateFailed)
+}
+
+fn remove_plugin_menu_item(parent: &Submenu, item: MenuItemKind) {
+    match item {
+        MenuItemKind::MenuItem(item) => {
+            let _ = parent.remove(&item);
+        }
+        MenuItemKind::Submenu(item) => {
+            let _ = parent.remove(&item);
+        }
+        MenuItemKind::Predefined(item) => {
+            let _ = parent.remove(&item);
+        }
+        MenuItemKind::Check(item) => {
+            let _ = parent.remove(&item);
+        }
+        MenuItemKind::Icon(item) => {
+            let _ = parent.remove(&item);
+        }
+    }
 }
 
 fn append_menu_entries(

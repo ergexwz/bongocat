@@ -31,14 +31,7 @@ pub(crate) fn system_menu_presentation(
         hide_on_pointer_hover_enabled: snapshot.overlay.hide_on_pointer_hover,
         plugins_menu: text("system_menu.plugins"),
         plugins_empty: text("system_menu.plugins_empty"),
-        plugin_items: plugin_items
-            .iter()
-            .map(|item| bongocat_platform::SystemMenuPluginItem {
-                plugin: item.plugin.clone(),
-                action: item.action.clone(),
-                label: item.label.clone(),
-            })
-            .collect(),
+        plugin_items: plugin_items.iter().map(plugin_menu_item).collect(),
         // A Production build stays gated on its channel and release signing key
         // (`bongocat_app::update_check_available`): without them a check can only fail.
         // A Development build can never update either, but the update window is where
@@ -134,4 +127,17 @@ pub(crate) async fn apply_system_menu_overlay_action(
     }
     .map(|_| true)
     .map_err(|error| error.to_string())
+}
+
+/// Convert one plugin-owned menu node into the platform's read-only tree.
+fn plugin_menu_item(
+    item: &bongocat_plugin_service::CompanionMenuItem,
+) -> bongocat_platform::SystemMenuPluginItem {
+    bongocat_platform::SystemMenuPluginItem {
+        plugin: item.plugin.clone(),
+        action: item.action.clone(),
+        label: item.label.clone(),
+        checked: item.checked,
+        children: item.children.iter().map(plugin_menu_item).collect(),
+    }
 }

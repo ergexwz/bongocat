@@ -1,7 +1,7 @@
 //! Process-backed plugin registry. A failed child only removes that entry.
 use crate::loader::Process;
 use bongocat_plugin_sdk::{
-    Configuration, HostMessage, PetBounds, PluginMetadata, PluginOutput, UiNode,
+    Configuration, HostMessage, PetBounds, PetState, PluginMetadata, PluginOutput, UiNode,
 };
 use std::{collections::BTreeMap, io, path::PathBuf};
 use thiserror::Error;
@@ -465,6 +465,21 @@ impl PluginRegistry {
             }
         }
     }
+
+    /// Hand the active model and model-window visibility to every running
+    /// companion that asked for it.
+    ///
+    /// A plugin from the flat companion contract never receives this frame, and
+    /// therefore keeps parsing every message it can still receive.
+    pub fn pet_state(&mut self, state: PetState) {
+        for entry in self.entries.values_mut() {
+            if entry.process.is_some() && receives_pet_state(&entry.metadata.capabilities) {
+                let _ = entry.required_exchange(HostMessage::PetState {
+                    state: state.clone(),
+                });
+            }
+        }
+    }
     pub fn input_activity(
         &mut self,
         elapsed_ms: u64,
@@ -510,6 +525,15 @@ impl PluginRegistry {
             });
         }
     }
+}
+
+/// Whether one plugin's manifest opted into the companion state message.
+///
+/// The rectangle is still gated by `CompanionV1`; the model/visibility message
+/// has its own capability so a companion from the older flat contract is never
+/// sent a frame it cannot parse.
+fn receives_pet_state(capabilities: &[bongocat_plugin_sdk::Capability]) -> bool {
+    capabilities.contains(&bongocat_plugin_sdk::Capability::PetStateV1)
 }
 
 /// The activity message one plugin's declared capabilities entitle it to.
@@ -854,5 +878,13 @@ mod tests {
         // A plugin that did not ask for activity is not an activity plugin at all.
         assert!(message(&[]).is_none());
         assert!(message(&[Capability::ModelUi]).is_none());
+    }
+
+    /// The companion geometry contract does not imply the newer state message.
+    #[test]
+    fn only_the_declared_capability_receives_pet_state() {
+        assert!(receives_pet_state(&[Capability::PetStateV1]));
+        assert!(!receives_pet_state(&[Capability::CompanionV1]));
+        assert!(!receives_pet_state(&[]));
     }
 }

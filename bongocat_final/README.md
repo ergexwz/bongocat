@@ -1,6 +1,6 @@
 # BongoCat 2.5.0 — Xbox/XInput 后台手柄修复 + 伴随插件版
 
-这是基于 upstream BongoCat 2.4.0 的本地 2.5.0 构建，修复了 Windows 上 Xbox 手柄在桌宠窗口不获得前台焦点时没有输入的问题，并修复了 Xbox HID 键盘报告导致 gamepad/standard 模型频繁自动切换的问题；同时加入待办 / 邮件独立插件系统。
+这是基于 upstream BongoCat 2.4.0 的本地 2.5.0 构建，修复了 Windows 上 Xbox 手柄在桌宠窗口不获得前台焦点时没有输入的问题，并修复了 Xbox HID 键盘报告导致 gamepad/standard 模型频繁自动切换的问题；同时加入待办 / 邮件 / 赛博打工独立插件系统。宿主插件协议包含树形插件菜单、桌宠模式/可见性消息和匿名输入活动计数。
 
 ## 直接运行
 
@@ -43,14 +43,17 @@ bongocat_final/
 
 **不要只复制 `bongocat-app.exe`**：程序从可执行文件同目录的 `resources/models` 加载内置模型。分发时请复制整个 `bongocat_final` 文件夹。
 
-## 伴随插件（待办 / 邮件）
+## 伴随插件（待办 / 邮件 / 赛博打工）
 
-完整源码在仓库根目录的 `bongocat_plugins/`，包含两个独立 Tauri 2 插件进程：
+完整源码在仓库根目录的 `bongocat_plugins/`，包含三个独立 Tauri 2 插件进程：
 
 - `com.bongocat.todo`：手绘待办面板、快速新建、到期气泡。
 - `com.bongocat.mail`：IMAP 邮件列表、归档、设置和桌宠气泡；邮件列表、归档和设置窗口支持标题栏缩放、右下角拖动缩放，固定宽高比且缩放比例会保存。
+- `com.bongocat.cyberwork`：桌宠头顶的键鼠敲击计数器；gamepad 模式显示游戏时长。右键桌宠 → 插件 → `计数器缩放`（20%–160%）或 `使用历史`（敲击次数/游戏时长，最近一天、一周、一月）。历史保留 400 天，鼠标悬停桌宠时才显示计数器。
 
-已构建的 ZIP 位于 `bongocat_plugins/dist/`。如需重新构建：
+赛博打工需要本仓库这次重建后的宿主（新增 `pet_state_v1` 和 `plugin_menu_tree_v1`）；
+旧的 2.5.0 可执行文件无法加载它。已构建的 ZIP 位于 `bongocat_plugins/dist/`。
+如需重新构建：
 
 ```powershell
 cd bongocat_plugins
@@ -58,7 +61,7 @@ cd bongocat_plugins
 ```
 
 然后在 BongoCat 设置 → 插件中心点击“从文件安装”，选择 `dist/` 下的 ZIP。
-右键桌宠（或托盘菜单）的“插件”子菜单会打开待办/邮件窗口。
+右键桌宠（或托盘菜单）的“插件”子菜单会打开待办/邮件窗口以及赛博打工的缩放和历史菜单。
 
 本地安装的插件是可执行代码，宿主会要求确认信任来源；插件数据保存在
 `%APPDATA%\com.ayangweb.bongo-cat\production\plugins\data\` 下。

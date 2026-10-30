@@ -27,7 +27,7 @@ toggling the switch once repairs it. A failed rewrite never blocks startup.
 
 Locally built BongoCat 2.5.0 (based on upstream 2.4.0) with the Xbox/XInput
 background-gamepad fix, the zero-scan-code input-reset fix, and the companion
-plugin system (todo / mail plugins are installed from local ZIPs).
+plugin system (todo / mail / Cyber Work plugins are installed from local ZIPs).
 
 ```text
 bongocat_final\run.bat

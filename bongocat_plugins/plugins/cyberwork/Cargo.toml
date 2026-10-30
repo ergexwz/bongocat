@@ -1,0 +1,36 @@
+[package]
+name = "bongocat-cyberwork"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+bongocat-companion.workspace = true
+bongocat-plugin-sdk.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "bongocat-cyberwork"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+print_stderr = "deny"
+print_stdout = "deny"

@@ -124,6 +124,10 @@ Rust 2024 edition application
 - 模型窗口的插件内容由平台 overlay 合成为独立 HUD 图层（macOS Metal、Windows D3D11），与模型
   画面同帧绘制；图层携带命中区域，点击经平台窗口消息路由回插件。只有非 Loading 的 Button
   与 Toggle 可交互，分别发送 Action 与布尔配置修改；Integer、Select 在该窗口只作展示。
+- 伴随插件可声明 `pet_state_v1` 接收当前模型 id/是否内置和模型窗口可见性；可声明
+  `plugin_menu_tree_v1` 发布有界两层菜单（子菜单与可勾选叶子），宿主以原生
+  `Submenu`/`CheckMenuItem` 呈现。没有声明新 capability 的插件继续使用原扁平菜单与
+  `PetBounds`，不会收到无法解析的新消息。
 - 插件按需分发：清单与包来自 GitHub release 资源，复用 `bongocat-update` 的代理前缀、
   HTTPS 与 Minisign 校验；主程序安装包不预置插件资源。
 - 插件 SDK、官方插件源码、ZIP 打包、签名、目录生成和 Git Tag Release 全部由独立仓库

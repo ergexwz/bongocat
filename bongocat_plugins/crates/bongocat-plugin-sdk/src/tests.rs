@@ -71,3 +71,99 @@ fn pet_bounds_reject_degenerate_rectangles() {
         .validate()
     );
 }
+
+#[test]
+fn pet_state_rejects_an_unusable_model_id() {
+    assert!(
+        PetState {
+            model: Some(ModelInfo {
+                id: "gamepad".into(),
+                built_in: true,
+            }),
+            visible: true,
+        }
+        .validate()
+    );
+    assert!(
+        !PetState {
+            model: Some(ModelInfo {
+                id: "bad\nid".into(),
+                built_in: true,
+            }),
+            visible: true,
+        }
+        .validate()
+    );
+    assert!(
+        PetState {
+            model: None,
+            visible: false,
+        }
+        .validate()
+    );
+}
+
+#[test]
+fn menu_tree_is_bounded_and_checked_only_on_leaves() {
+    let mut output = output();
+    output.menu_tree = vec![PluginMenuNode {
+        id: "scale".into(),
+        label: "Scale".into(),
+        checked: None,
+        children: (0..PLUGIN_MENU_LIMIT)
+            .map(|index| PluginMenuNode {
+                id: format!("scale-{index}"),
+                label: format!("{}%", (index + 1) * 20),
+                checked: Some(index == 4),
+                children: Vec::new(),
+            })
+            .collect(),
+    }];
+    assert!(output.validate());
+
+    // A submenu cannot carry a check mark of its own.
+    output.menu_tree[0].checked = Some(true);
+    assert!(!output.validate());
+
+    // Duplicate sibling ids are a host hit-testing bug, not a preference.
+    output.menu_tree[0].checked = None;
+    output.menu_tree[0].children[1].id = output.menu_tree[0].children[0].id.clone();
+    assert!(!output.validate());
+
+    // Depth two is the contract; a grandchild is refused.
+    output.menu_tree[0].children[0].children = vec![PluginMenuNode {
+        id: "nested".into(),
+        label: "Nested".into(),
+        checked: None,
+        children: Vec::new(),
+    }];
+    assert!(!output.validate());
+}
+
+#[test]
+fn menu_tree_rejects_more_than_the_top_level_limit() {
+    let mut output = output();
+    output.menu_tree = (0..PLUGIN_MENU_LIMIT + 1)
+        .map(|index| PluginMenuNode {
+            id: format!("item-{index}"),
+            label: "Item".into(),
+            checked: None,
+            children: Vec::new(),
+        })
+        .collect();
+    assert!(!output.validate());
+}
+
+#[test]
+fn menu_tree_serialization_omits_absent_optional_fields() {
+    let node = PluginMenuNode {
+        id: "open".into(),
+        label: "Open".into(),
+        checked: None,
+        children: Vec::new(),
+    };
+    assert_eq!(
+        serde_json::to_string(&node).unwrap(),
+        r#"{"id":"open","label":"Open"}"#
+    );
+}

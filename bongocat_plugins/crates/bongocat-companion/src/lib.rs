@@ -8,8 +8,8 @@
 #![forbid(unsafe_code)]
 
 use bongocat_plugin_sdk::{
-    Configuration, HostMessage, PROTOCOL_VERSION, PetBounds, PluginBubble, PluginOutput, Request,
-    Response, read_frame, write_frame,
+    Configuration, HostMessage, InputActivity, PROTOCOL_VERSION, PetBounds, PetState, PluginBubble,
+    PluginOutput, Request, Response, read_frame, write_frame,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -102,6 +102,18 @@ impl UiBridge {
     pub fn stop_requested(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
+
+    /// The Tauri handle once the app has attached it.
+    ///
+    /// A companion that owns windows and needs to present them from the
+    /// protocol thread uses this to schedule the actual window call on the
+    /// platform UI thread with [`AppHandle::run_on_main_thread`].
+    pub fn app_handle(&self) -> Option<AppHandle> {
+        self.app
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 /// The business surface one companion plugin exposes to the host protocol.
@@ -115,6 +127,27 @@ pub trait CompanionState: Send + 'static {
     fn pet_bounds(&mut self, bounds: PetBounds) -> Result<PluginOutput, String>;
     fn reset(&mut self) -> Result<PluginOutput, String>;
     fn stop(&mut self) -> Result<PluginOutput, String>;
+
+    /// Anonymous device totals changed.
+    ///
+    /// The counters are absolute host totals; a plugin that cares compares them
+    /// with the values it saw last. The default keeps every existing companion
+    /// working without declaring `input_activity_v1`.
+    fn input_activity(
+        &mut self,
+        _elapsed_ms: u64,
+        _activity: InputActivity,
+    ) -> Result<PluginOutput, String> {
+        self.output()
+    }
+
+    /// The active model or the model window's visibility changed.
+    ///
+    /// Only plugins that declare `pet_state_v1` receive this message; the
+    /// default keeps the trait usable for companions that do not need it.
+    fn pet_state(&mut self, _state: PetState) -> Result<PluginOutput, String> {
+        self.output()
+    }
 
     fn pause(&mut self) -> Result<PluginOutput, String> {
         self.output()
@@ -226,7 +259,12 @@ fn handle_message<S: CompanionState>(
                 output
             }
             HostMessage::Handshake { .. } => Err("incompatible plugin handshake".into()),
-            HostMessage::InputEvents { .. } | HostMessage::InputActivity { .. } => state.output(),
+            HostMessage::InputActivity {
+                elapsed_ms,
+                activity,
+            } => state.input_activity(elapsed_ms, activity),
+            HostMessage::PetState { state: pet } => state.pet_state(pet),
+            HostMessage::InputEvents { .. } => state.output(),
         },
         _ => Err("handshake required".into()),
     }
