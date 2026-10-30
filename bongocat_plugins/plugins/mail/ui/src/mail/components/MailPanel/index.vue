@@ -108,6 +108,8 @@
     <div class="panel-content">
       <slot />
     </div>
+
+    <slot name="overlay" />
   </div>
 </template>
 

@@ -3,7 +3,7 @@
 Two independent Tauri 2 companion plugins for the patched BongoCat desktop pet:
 
 - `com.bongocat.todo` — hand-drawn todo panel, quick add and due bubbles. The panel and quick-add window support title-bar zoom and corner drag-resize, with the scale persisted.
-- `com.bongocat.mail` — hand-drawn IMAP notification center, archive and settings. All panels drag by their title bar and the settings form scrolls inside its window.
+- `com.bongocat.mail` — hand-drawn IMAP notification center, archive and settings. All panels drag by their title bar; the mail list, archive and settings windows support title-bar zoom and corner drag-resize with a fixed aspect ratio, and the per-window scale is persisted.
 
 The plugins are separate native processes. They speak the versioned
 `bongocat-plugin-sdk` JSON protocol on stdin/stdout and own their Tauri windows.
@@ -14,6 +14,9 @@ coordinates, local ZIP installation and storage paths.
 
 Requirements: Rust 1.97.1, Node 20+/pnpm, Visual Studio Build Tools with the
 Windows SDK, and the WebView2 runtime (present on normal Windows 10/11 installs).
+The frontend lockfile and `pnpm.onlyBuiltDependencies` build allowlist are
+verified with pnpm 10.x; newer pnpm major versions may require migrating that
+allowlist to `pnpm-workspace.yaml`.
 
 ```powershell
 cd bongocat_plugins

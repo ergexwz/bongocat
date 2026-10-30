@@ -1,11 +1,22 @@
-pub(super) fn definition(user: &str, executable: &str, elevated: bool) -> String {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TaskRunLevel {
+    Highest,
+    Least,
+}
+
+impl TaskRunLevel {
+    const fn xml(self) -> &'static str {
+        match self {
+            Self::Highest => "HighestAvailable",
+            Self::Least => "LeastPrivilege",
+        }
+    }
+}
+
+pub(super) fn definition(user: &str, executable: &str, run_level: TaskRunLevel) -> String {
     let user = escape(user);
     let executable = escape(executable);
-    let level = if elevated {
-        "HighestAvailable"
-    } else {
-        "LeastPrivilege"
-    };
+    let level = run_level.xml();
     format!(
         r#"<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
 <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger></Triggers>
@@ -31,7 +42,11 @@ mod tests {
 
     #[test]
     fn interactive_login_task_keeps_privilege_and_lifetime_explicit() {
-        let xml = definition(r"DOMAIN\user", r"C:\Program Files\BongoCat.exe", true);
+        let xml = definition(
+            r"DOMAIN\user",
+            r"C:\Program Files\BongoCat.exe",
+            TaskRunLevel::Highest,
+        );
         assert_eq!(xml.matches(r"<UserId>DOMAIN\user</UserId>").count(), 2);
         for expected in [
             "InteractiveToken",
@@ -43,12 +58,12 @@ mod tests {
         ] {
             assert!(xml.contains(expected));
         }
-        assert!(definition("user", "app.exe", false).contains("LeastPrivilege"));
+        assert!(definition("user", "app.exe", TaskRunLevel::Least).contains("LeastPrivilege"));
     }
 
     #[test]
     fn xml_special_characters_and_unicode_are_literal_data() {
-        let xml = definition("user<&", "C:\\猫 & <cat>\"'.exe", true);
+        let xml = definition("user<&", "C:\\猫 & <cat>\"'.exe", TaskRunLevel::Highest);
         assert!(xml.contains("user&lt;&amp;"));
         assert!(xml.contains("猫 &amp; &lt;cat&gt;&quot;&apos;.exe"));
     }

@@ -850,7 +850,10 @@ Windows 验收覆盖 PixPin `Ctrl+Alt+A`、Win+L、PrintScreen、UAC、管理员
   已提权进程注册 HighestAvailable，未提权进程注册 LeastPrivilege（ADR-0095）。macOS 由
   `auto-launch 0.6.0` 写 `~/Library/LaunchAgents/{app_name}.plist`
   （`RunAtLoad`）。Production 使用该后端；命令固定为当前 executable 加 `--run-seconds 0`，
-  默认不要求管理员权限或 TCC 授权；已设置管理员运行的应用须以管理员身份启用启动项（ADR-0095）。该能力只属于已发布的产品：开发构建的可执行文件是
+  默认不要求管理员权限或 TCC 授权；已设置管理员运行的应用须以管理员身份启用启动项（ADR-0095）。
+  读取任务状态时同时比较任务 Action 指向的 executable 与当前 executable：已启用但路径不同
+  汇报 `Stale`；Production 启动时在单实例检查之前把已启用任务更新到当前 executable，并保留
+  原 RunLevel（ADR-0095）。该能力只属于已发布的产品：开发构建的可执行文件是
   构建产物而非已安装应用，所以 `bongocat-app` 按构建环境判定，开发构建直接汇报
   `Unsupported(BuildEnvironment)`、不触碰平台，设置里的启动项整行按统一禁用样式置灰，并保留可见的 `unsupported_build` 文案（ADR-0051）。
 - 启动权限：产品启动时以自身进程令牌的 `TokenElevation` 判断是否已提权，未提权时用 `rfd` 的
@@ -1769,8 +1772,10 @@ Windows 当前用户 Run value 按 Development/Production 分名；macOS 13+ 只
 ### ADR-043：启动项后端统一 auto-launch
 
 macOS 12+ 使用 `auto-launch 0.6.0` LaunchAgent plist；Windows 启动项由 ADR-0095 的
-当前用户交互式登录计划任务取代 HKCU Run，环境隔离保持；后端只产生 Enabled/Disabled，
-`Stale`/`RequiresApproval`/`NotFound` 保留为契约变体。Windows stale 检测退役。
+当前用户交互式登录计划任务取代 HKCU Run，环境隔离保持。Windows 任务后端的读取会
+比较 Action 指向的 executable 与当前 executable，已启用但目标不同时产生 `Stale`；
+Production 启动时在单实例检查之前保留原 RunLevel 把已启用任务重注册到当前 executable
+（ADR-0095）。`RequiresApproval`/`NotFound` 保留为契约变体。
 
 ### ADR-051：开发构建不提供登录时启动
 

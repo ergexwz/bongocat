@@ -152,3 +152,15 @@ pub fn set_startup_item_enabled(
 ) -> Result<StartupItemState, StartupItemError> {
     startup_item_native::set_enabled(environment, enabled)
 }
+
+/// Point an already-enabled Windows login task at the executable that is running now.
+///
+/// Returns whether the registration was rewritten. A missing or disabled task is
+/// never enabled here, and macOS keeps its LaunchAgent backend unchanged, so this
+/// only answers for the Windows Task Scheduler path.
+#[cfg(target_os = "windows")]
+pub fn reconcile_startup_item(
+    environment: StartupItemEnvironment,
+) -> Result<bool, StartupItemError> {
+    startup_item_native::reconcile(environment)
+}

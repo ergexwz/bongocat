@@ -7,14 +7,23 @@ import { useI18n } from 'vue-i18n'
 import Bubble from '@/mail/components/Bubble/index.vue'
 import MailItem from '@/mail/components/MailItem/index.vue'
 import MailPanel from '@/mail/components/MailPanel/index.vue'
-import type { MailAccount, MailNotification, MailSettings } from '@/mail/types'
+import ResizeGrip from '@/mail/components/ResizeGrip/index.vue'
+import ZoomControl from '@/mail/components/ZoomControl/index.vue'
+import type { MailAccount, MailNotification, MailSettings, MailSnapshot, MailUiSettings } from '@/mail/types'
 import { matchProvider, matchProviderLogo, resolveWebmailUrl } from '@/mail/utils/providers'
 import { absoluteDate, relativeTime } from '@/mail/utils/timeFormat'
-import { currentVisible, hideCurrent, showAt } from '@/window'
+import { PANEL_SIZE, currentVisible, hideCurrent, showAt } from '@/window'
 
 const view = new URLSearchParams(window.location.search).get('view') ?? 'runtime'
 const { t, locale } = useI18n()
 
+type PanelView = 'mail-list' | 'mail-archive' | 'mail-settings'
+
+const DEFAULT_UI: MailUiSettings = {
+  listScale: 1,
+  archiveScale: 1,
+  settingsScale: 1,
+}
 const accounts = ref<MailAccount[]>([])
 const notifications = ref<MailNotification[]>([])
 const settings = ref<MailSettings>({
@@ -23,7 +32,9 @@ const settings = ref<MailSettings>({
   bubbleAutoDismiss: false,
   unreadOnly: false,
 })
+const uiSettings = ref<MailUiSettings>({ ...DEFAULT_UI })
 const visible = ref(false)
+const previewScale = ref<number | null>(null)
 const now = ref(Date.now())
 const bubbles = ref<Array<any>>([])
 const bubbleHeight = ref(120)
@@ -36,16 +47,36 @@ const archived = computed(() =>
     .sort((left, right) => (right.archivedAt ?? 0) - (left.archivedAt ?? 0)),
 )
 const currentBubble = computed(() => bubbles.value[0])
+const currentScale = computed(() => {
+  if (previewScale.value !== null) return previewScale.value
+  switch (view) {
+    case 'mail-list':
+      return uiSettings.value.listScale
+    case 'mail-archive':
+      return uiSettings.value.archiveScale
+    case 'mail-settings':
+      return uiSettings.value.settingsScale
+    default:
+      return 1
+  }
+})
 
-async function hydrate() {
-  const snapshot = await invoke<{
-    accounts: MailAccount[]
-    notifications: MailNotification[]
-    settings: MailSettings
-  }>('mail_snapshot')
+function panelKind(): PanelView | null {
+  return view === 'mail-list' || view === 'mail-archive' || view === 'mail-settings'
+    ? view
+    : null
+}
+
+function applySnapshot(snapshot: MailSnapshot) {
   accounts.value = snapshot.accounts
   notifications.value = snapshot.notifications
   settings.value = snapshot.settings
+  uiSettings.value = snapshot.ui ?? { ...DEFAULT_UI }
+}
+
+async function hydrate() {
+  const snapshot = await invoke<MailSnapshot>('mail_snapshot')
+  applySnapshot(snapshot)
 }
 
 async function show() {
@@ -55,8 +86,59 @@ async function show() {
   await showAt(
     view as 'mail-list' | 'mail-archive' | 'mail-settings' | 'bubble',
     bubbleHeight.value + 16,
+    currentScale.value,
   )
   visible.value = true
+}
+
+async function persistScale(value: number) {
+  const kind = panelKind()
+  if (!kind) return
+  const snapshot = await invoke<MailSnapshot>('mail_set_ui_scale', { view: kind, scale: value })
+  applySnapshot(snapshot)
+}
+
+async function changeScale(value: number) {
+  previewScale.value = null
+  try {
+    await persistScale(value)
+  } catch (error) {
+    console.error(error)
+    return
+  }
+  if (visible.value && panelKind()) {
+    await showAt(
+      view as PanelView,
+      bubbleHeight.value + 16,
+      value,
+    )
+  }
+}
+
+function previewScaleValue(value: number) {
+  previewScale.value = value
+}
+
+async function commitScale(value: number) {
+  const previous = panelKind() === 'mail-list'
+    ? uiSettings.value.listScale
+    : panelKind() === 'mail-archive'
+      ? uiSettings.value.archiveScale
+      : uiSettings.value.settingsScale
+  try {
+    await persistScale(value)
+    previewScale.value = null
+  } catch (error) {
+    console.error(error)
+    previewScale.value = null
+    if (visible.value && panelKind()) {
+      await showAt(
+        view as PanelView,
+        bubbleHeight.value + 16,
+        previous,
+      )
+    }
+  }
 }
 
 async function close() {
@@ -317,9 +399,12 @@ onMounted(async () => {
         <span class="panel-title">
           {{ view === 'mail-list' ? t('plugins.mail.labels.mailListTitle') : t('plugins.mail.labels.mailArchiveTitle') }}
         </span>
-        <button class="panel-close" type="button" @click="close">
-          {{ t('plugins.mail.labels.bubbleClose') }}
-        </button>
+        <div class="panel-actions">
+          <ZoomControl :scale="currentScale" @change="changeScale" />
+          <button class="panel-close" type="button" @click="close">
+            {{ t('plugins.mail.labels.bubbleClose') }}
+          </button>
+        </div>
       </div>
       <div class="panel-scroll">
         <template v-if="view === 'mail-list'">
@@ -378,6 +463,16 @@ onMounted(async () => {
           </div>
         </template>
       </div>
+      <template #overlay>
+        <ResizeGrip
+          class="panel-resize"
+          :base-width="PANEL_SIZE['mail-list'].width"
+          :base-height="PANEL_SIZE['mail-list'].height"
+          :scale="currentScale"
+          @input="previewScaleValue"
+          @commit="commitScale"
+        />
+      </template>
     </MailPanel>
   </div>
 
@@ -389,9 +484,12 @@ onMounted(async () => {
     <MailPanel>
       <div class="panel-header" data-tauri-drag-region>
         <span class="panel-title">{{ t('plugins.mail.labels.preferenceTitle') }}</span>
-        <button class="panel-close" type="button" @click="close">
-          {{ t('plugins.mail.labels.bubbleClose') }}
-        </button>
+        <div class="panel-actions">
+          <ZoomControl :scale="currentScale" @change="changeScale" />
+          <button class="panel-close" type="button" @click="close">
+            {{ t('plugins.mail.labels.bubbleClose') }}
+          </button>
+        </div>
       </div>
       <div class="panel-scroll">
         <div class="settings">
@@ -461,6 +559,16 @@ onMounted(async () => {
           <p class="hint">{{ t('plugins.mail.labels.proxyHint') }}</p>
         </div>
       </div>
+      <template #overlay>
+        <ResizeGrip
+          class="panel-resize"
+          :base-width="PANEL_SIZE['mail-settings'].width"
+          :base-height="PANEL_SIZE['mail-settings'].height"
+          :scale="currentScale"
+          @input="previewScaleValue"
+          @commit="commitScale"
+        />
+      </template>
     </MailPanel>
   </div>
 
@@ -548,6 +656,25 @@ body,
   color: var(--ink-soft);
   font: inherit;
   cursor: pointer;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.panel-resize {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  z-index: 3;
+}
+
+body.is-resizing-window,
+body.is-resizing-window * {
+  cursor: nwse-resize !important;
+  user-select: none !important;
 }
 
 .panel-scroll {

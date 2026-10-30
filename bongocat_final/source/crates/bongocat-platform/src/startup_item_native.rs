@@ -8,12 +8,8 @@ pub(super) fn state(
     environment: StartupItemEnvironment,
 ) -> Result<StartupItemState, StartupItemError> {
     #[cfg(target_os = "windows")]
-    if let Some(enabled) = super::startup_item_windows::state(environment)? {
-        return Ok(if enabled {
-            StartupItemState::Enabled
-        } else {
-            StartupItemState::Disabled
-        });
+    if let Some(state) = super::startup_item_windows::state(environment)? {
+        return Ok(state);
     }
     let backend = backend(environment)?;
     match backend.is_enabled() {
@@ -54,6 +50,11 @@ pub(super) fn set_enabled(
         }
         state(environment)
     }
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn reconcile(environment: StartupItemEnvironment) -> Result<bool, StartupItemError> {
+    super::startup_item_windows::reconcile(environment)
 }
 
 #[cfg(target_os = "macos")]

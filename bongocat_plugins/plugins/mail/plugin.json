@@ -3,7 +3,7 @@
     "id": "com.bongocat.mail",
     "name": "Mail",
     "description": "A hand-drawn IMAP mail notification center with accounts, archive and bubbles.",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "app_versions": ">=2.5.0",
     "protocol_version": 1,
     "entry": "bongocat-mail",

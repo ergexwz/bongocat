@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Bug Fixes
+
+- Fixed the Windows login startup task continuing to launch an old executable after the application folder moved.
+
 ## 2.4.0 - 2026-10-26
 
 ### ✨ Features
