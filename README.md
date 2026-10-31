@@ -5,6 +5,7 @@
 目前有三个插件：(1) todo清单、(2) 邮件整理、(3) 点击计数
 
 原项目链接：https://github.com/ayangweb/BongoCat
+参考项目：https://github.com/ChHsiching/bongocat-todo
 
 **下载教程**：下载 `bongocat/version/BongoCat_2.5.0` 整个文件夹即可食用（2.5.0 不提供 ZIP；`BongoCat_2.4.1` 目录与 ZIP 保留为旧版归档）。
 
