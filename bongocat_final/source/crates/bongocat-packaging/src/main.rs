@@ -900,6 +900,20 @@ fn build_application(
             target.triple()
         ));
     }
+    if target == ReleaseTarget::WindowsX86_64 {
+        let directory = if ReleaseTarget::host()? == target {
+            workspace.join("target/release")
+        } else {
+            workspace
+                .join("target")
+                .join(target.triple())
+                .join("release")
+        };
+        fs::copy(
+            directory.join(format!("{APPLICATION_BINARY}.exe")),
+            directory.join(bongocat_plugin_manager::WINDOWS_PLUGIN_BROKER_FILE),
+        )?;
+    }
     Ok(())
 }
 

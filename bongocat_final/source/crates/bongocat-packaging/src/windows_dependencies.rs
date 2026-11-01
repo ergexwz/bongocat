@@ -98,7 +98,22 @@ fn verify_microsoft_signature(file: &Path) -> Result<()> {
 }
 
 pub(super) fn resources(workspace: &Path, pinned_catalog: Option<&str>) -> Result<Vec<Resource>> {
+    let binary_directory = if ReleaseTarget::host()? == ReleaseTarget::WindowsX86_64 {
+        workspace.join("target/release")
+    } else {
+        workspace
+            .join("target")
+            .join(ReleaseTarget::WindowsX86_64.triple())
+            .join("release")
+    };
     let mut files = vec![
+        Resource::Mapped {
+            src: binary_directory
+                .join(bongocat_plugin_manager::WINDOWS_PLUGIN_BROKER_FILE)
+                .display()
+                .to_string(),
+            target: PathBuf::from(bongocat_plugin_manager::WINDOWS_PLUGIN_BROKER_FILE),
+        },
         Resource::Mapped {
             src: plugins(workspace)
                 .join("plugins.json")
@@ -175,7 +190,11 @@ mod tests {
     fn dependencies_use_app_local_crt_and_per_user_offline_webview_setup() {
         let root = Path::new("workspace");
         // A nonexistent or unsigned bundle must fail before packaging.
-        assert_eq!(resources(root, None).unwrap().len(), 4);
+        assert_eq!(resources(root, None).unwrap().len(), 5);
+        let files = resources(root, None).unwrap();
+        assert!(files.iter().any(|file| matches!(file, Resource::Mapped { src, target }
+            if target == Path::new(bongocat_plugin_manager::WINDOWS_PLUGIN_BROKER_FILE)
+            && Path::new(src).file_name().is_some_and(|name| name == bongocat_plugin_manager::WINDOWS_PLUGIN_BROKER_FILE))));
         let script = installer_sections(root);
         assert!(script.contains("HKCU"));
         assert!(script.contains("WOW6432Node"));

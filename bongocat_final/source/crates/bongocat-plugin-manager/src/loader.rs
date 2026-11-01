@@ -40,7 +40,12 @@ impl Process {
             .unwrap_or_else(|| root.join("data"));
         std::fs::create_dir_all(&data_dir)?;
         #[cfg(target_os = "windows")]
-        let mut child = PluginProcess::spawn(&entry_path(root, &metadata.entry), root, &data_dir)?;
+        let mut child = PluginProcess::spawn(
+            &entry_path(root, &metadata.entry),
+            root,
+            &data_dir,
+            &std::env::current_exe()?.with_file_name(crate::WINDOWS_PLUGIN_BROKER_FILE),
+        )?;
         #[cfg(target_os = "windows")]
         let input = child.stdin.take();
         #[cfg(not(target_os = "windows"))]

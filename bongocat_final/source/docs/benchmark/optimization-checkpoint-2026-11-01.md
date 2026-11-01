@@ -15,7 +15,7 @@ Status: the portability follow-up produced a local Windows installer; clean-mach
 
 ### Portability follow-up
 
-`target/package/BongoCat_2.5.0_x64.exe` is available (239,372,964 bytes), SHA-256 `1e87fab3f79d712e2f53597d23d2d27b0464ada2c43a84d2caa3f07f06e04d78`. It is a local unsigned build, not a published release. See [Windows installation and verification](../windows-installation.md).
+The initial installer (239,372,964 bytes), SHA-256 `1e87fab3f79d712e2f53597d23d2d27b0464ada2c43a84d2caa3f07f06e04d78`, is superseded by `target/package/2026-11-02/BongoCat_2.5.0_x64.exe` (239,396,086 bytes), SHA-256 `b994cb617648d4d48198f75410f2a75ff8f74b3e6148a624031f99d98381a8d1`. It is a local unsigned build, not a published release. See [Windows installation and verification](../windows-installation.md) and the [installer feedback fixes](installer-fixes-2026-11-02.md) for the confirmed permission/transport defects, matching backgrounds and final extracted-payload tests. Older verification below is historical; the follow-up does not establish clean-machine, elevated-host, game or performance acceptance.
 
 - Companions rebuilt with `custom-protocol` so frontends are embedded. The installer includes all three models, all three companion ZIPs, app-local VC DLLs and the Microsoft-signed x64 WebView2 offline installer.
 - The explicit local-bundle option compiles a catalog digest into the host; catalog/ZIP tampering is rejected. The online catalog key is unchanged. No production signing key was generated.

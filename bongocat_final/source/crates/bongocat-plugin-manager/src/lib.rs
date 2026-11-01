@@ -20,6 +20,9 @@ use std::{
 use thiserror::Error;
 
 pub const MANIFEST_FILE: &str = "plugin.json";
+/// Separate ordinary-permission entry point, unaffected by compatibility flags
+/// attached to the main executable's path. Packaged from the same host image.
+pub const WINDOWS_PLUGIN_BROKER_FILE: &str = "bongocat-plugin-broker.exe";
 /// The directory under a plugin store root that holds installed package trees.
 pub const PACKAGES_DIRECTORY: &str = "packages";
 /// The directory under a plugin store root that holds plugin-owned data.

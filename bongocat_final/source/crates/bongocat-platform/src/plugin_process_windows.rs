@@ -16,6 +16,7 @@ use ::windows::{
         },
         System::{
             Com::CoCreateGuid,
+            Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock},
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -23,14 +24,14 @@ use ::windows::{
             },
             Pipes::CreatePipe,
             Threading::{
-                CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateEventW, CreateProcessAsUserW,
-                DeleteProcThreadAttributeList, EVENT_MODIFY_STATE, EXTENDED_STARTUPINFO_PRESENT,
-                GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess,
-                InitializeProcThreadAttributeList, OpenEventW, OpenProcess, OpenProcessToken,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
-                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
-                ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, SetEvent,
-                UpdateProcThreadAttribute, WaitForSingleObject,
+                CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateEventW,
+                CreateProcessAsUserW, DeleteProcThreadAttributeList, EVENT_MODIFY_STATE,
+                EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetCurrentProcessId,
+                GetExitCodeProcess, InitializeProcThreadAttributeList, OpenEventW, OpenProcess,
+                OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
+                PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+                QueryFullProcessImageNameW, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+                SetEvent, UpdateProcThreadAttribute, WaitForSingleObject,
             },
         },
         UI::{
@@ -205,9 +206,29 @@ impl Drop for Attributes {
     }
 }
 
-pub(super) fn spawn_broker(entry: &Path, data: &Path) -> io::Result<PluginProcess> {
+struct UserEnvironment(*mut std::ffi::c_void);
+impl Drop for UserEnvironment {
+    fn drop(&mut self) {
+        // SAFETY: this pointer was returned by CreateEnvironmentBlock and is
+        // uniquely owned until the synchronous process creation has completed.
+        if !self.0.is_null() {
+            let _ = unsafe { DestroyEnvironmentBlock(self.0) };
+        }
+    }
+}
+
+pub(super) fn spawn_broker(
+    entry: &Path,
+    data: &Path,
+    executable: &Path,
+) -> io::Result<PluginProcess> {
     let linked = medium_token()?;
-    let executable = std::env::current_exe()?;
+    let executable = executable.canonicalize()?;
+    let mut environment = UserEnvironment(std::ptr::null_mut());
+    // SAFETY: linked is the validated same-user medium token. A fresh user
+    // environment avoids inheriting elevated-process compatibility layers.
+    unsafe { CreateEnvironmentBlock(&mut environment.0, Some(raw(&linked)), false) }
+        .map_err(err)?;
     // Windows file names cannot contain quotes; reject embedded NULs as well.
     let arguments = [
         executable.as_os_str(),
@@ -296,8 +317,11 @@ pub(super) fn spawn_broker(entry: &Path, data: &Path) -> io::Result<PluginProces
             None,
             None,
             true,
-            CREATE_NO_WINDOW | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
-            None,
+            CREATE_NO_WINDOW
+                | CREATE_SUSPENDED
+                | EXTENDED_STARTUPINFO_PRESENT
+                | CREATE_UNICODE_ENVIRONMENT,
+            Some(environment.0),
             PCWSTR::null(),
             &startup.StartupInfo,
             &mut process,
@@ -367,9 +391,9 @@ pub fn run_broker_if_requested() -> Option<io::Result<()>> {
             .take()
             .ok_or_else(|| io::Error::other("plugin stdout unavailable"))?;
         std::thread::spawn(move || {
-            let _ = io::copy(&mut io::stdin().lock(), &mut input);
+            let _ = forward_pipe(&mut io::stdin().lock(), &mut input);
         });
-        let result = io::copy(&mut output, &mut io::stdout().lock());
+        let result = forward_pipe(&mut output, &mut io::stdout().lock());
         let _ = child.kill();
         let _ = child.wait();
         result.map(|_| ())

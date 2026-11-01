@@ -345,6 +345,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(result) = bongocat_platform::run_broker_if_requested() {
         return result.map_err(Into::into);
     }
+    #[cfg(target_os = "windows")]
+    if env::current_exe()?
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case(bongocat_plugin_manager::WINDOWS_PLUGIN_BROKER_FILE)
+        })
+    {
+        return Err("the plugin broker requires its internal invocation".into());
+    }
     let run_options = match RunOptions::parse(env::args().skip(1)) {
         Ok(options) => options,
         Err(error) if error.help => {

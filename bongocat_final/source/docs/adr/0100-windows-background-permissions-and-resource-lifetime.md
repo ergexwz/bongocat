@@ -60,12 +60,20 @@ an unpredictable local event, and waits for the parent's normal shutdown to
 release state and single-instance locks. Cancellation leaves the original running;
 another-account elevation is rejected. Automatic elevation is disabled in harnesses.
 
-In an elevated host, each plugin runs behind an ordinary-permission copy of the
-host. The linked token must have the same user/session, medium integrity and no
-elevation. Only explicit anonymous stdio handles are inherited. The broker and
+In an elevated host, each plugin runs behind `bongocat-plugin-broker.exe`, a
+dedicated ordinary-permission component packaged from the same host image. A
+legacy RUNASADMIN compatibility flag on the main executable's path must not
+also apply to the broker (reusing that path fails with Win32 error 740). The
+component accepts only its internal broker invocation and cannot start another
+host, change startup registration or open Settings when launched directly.
+The linked token must have the same user/session, medium integrity and no
+elevation. CreateEnvironmentBlock supplies a fresh user environment instead of
+inheriting elevated-process compatibility layers. Only explicit anonymous stdio
+handles are inherited. The broker and
 descendants belong to a kill-on-close job; failure to acquire or validate the token
 fails closed. The ordinary host adds no broker. The existing plugin protocol is
-unchanged. Actual UAC and process-token acceptance still requires an interactive
+unchanged. Pipe forwarding flushes each chunk before reading again: length-prefixed
+binary messages must not wait for a newline in stdout's line buffer. Actual UAC and process-token acceptance still requires an interactive
 Windows check; compilation alone does not satisfy this gate.
 
 ## Installer and verification
