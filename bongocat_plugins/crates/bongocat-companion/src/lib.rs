@@ -18,12 +18,30 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, sync_channel},
+        mpsc::{Receiver, SyncSender, sync_channel},
     },
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
+
+/// Called on the dedicated window worker. WebView2 creation must not block a
+/// synchronous Tauri event handler or the host protocol's bounded response.
+pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == label)
+        .ok_or(tauri::Error::WindowNotFound)?;
+    WebviewWindowBuilder::from_config(app, config)?.build()
+}
+
+type WindowTask = Box<dyn FnOnce(&AppHandle) + Send>;
 
 pub const EVENT_NAME: &str = "companion://event";
 
@@ -49,6 +67,8 @@ pub struct UiBridge {
     app: Arc<Mutex<Option<AppHandle>>>,
     pending: Arc<Mutex<Vec<UiEvent>>>,
     stop: Arc<AtomicBool>,
+    window_work: Arc<Mutex<Option<SyncSender<WindowTask>>>>,
+    open_windows: Arc<Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl UiBridge {
@@ -61,21 +81,44 @@ impl UiBridge {
     /// Returns true when a Stop arrived while the WebView was still starting;
     /// the caller should exit instead of opening a window.
     pub fn attach(&self, app: AppHandle) -> bool {
-        let pending = {
-            let mut pending = self
-                .pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::take(&mut *pending)
-        };
+        let (sender, receiver) = sync_channel::<WindowTask>(32);
+        let handle = app.clone();
+        let stop_requested = self.stop.clone();
+        if thread::Builder::new()
+            .name("companion-windows".into())
+            .spawn(move || {
+                while !stop_requested.load(Ordering::Acquire) {
+                    match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+                        Ok(task) => task(&handle),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            })
+            .is_err()
+        {
+            return true;
+        }
         *self
+            .window_work
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(sender);
+        let mut slot = self
             .app
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(app.clone());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending = std::mem::take(
+            &mut *self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        *slot = Some(app.clone());
+        drop(slot);
         let mut stop = false;
         for event in pending {
             stop |= matches!(event, UiEvent::Stop);
-            let _ = app.emit(EVENT_NAME, event);
+            self.deliver_ui_event(&app, event);
         }
         stop
     }
@@ -84,18 +127,74 @@ impl UiBridge {
         if matches!(event, UiEvent::Stop) {
             self.stop.store(true, Ordering::Release);
         }
-        let app = self
+        let slot = self
             .app
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        if let Some(app) = app {
-            let _ = app.emit(EVENT_NAME, event);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(app) = slot.clone() {
+            drop(slot);
+            self.deliver_ui_event(&app, event);
         } else {
-            self.pending
+            let mut pending = self
+                .pending
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(event);
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // UI hints are bounded; business queues are retained by the plugin.
+            if pending.len() == 64 {
+                pending.remove(0);
+            }
+            pending.push(event);
+        }
+    }
+
+    /// Serializes create/show/destroy without blocking the protocol or UI loop.
+    pub fn dispatch_window(
+        &self,
+        task: impl FnOnce(&AppHandle) + Send + 'static,
+    ) -> Result<(), String> {
+        let sender = self
+            .window_work
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| "window worker unavailable".to_owned())?;
+        sender
+            .try_send(Box::new(task))
+            .map_err(|_| "window request queue is full".to_owned())
+    }
+
+    pub fn set_window_open(&self, label: &str, open: bool) {
+        let mut windows = self
+            .open_windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if open {
+            windows.insert(label.to_owned());
+        } else {
+            windows.remove(label);
+        }
+    }
+    pub fn window_is_open(&self, label: &str) -> bool {
+        self.open_windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(label)
+    }
+    fn deliver_ui_event(&self, app: &AppHandle, event: UiEvent) {
+        let label = match &event {
+            UiEvent::Open { kind } => Some(kind.clone()),
+            UiEvent::Bubble { .. } => Some("bubble".to_owned()),
+            _ => None,
+        };
+        if let Some(label) = label {
+            self.set_window_open(&label, true);
+            let _ = self.dispatch_window(move |app| {
+                if ensure_window(app, &label).is_ok() {
+                    let _ = app.emit(EVENT_NAME, event);
+                }
+            });
+        } else {
+            let _ = app.emit(EVENT_NAME, event);
         }
     }
 
@@ -106,8 +205,8 @@ impl UiBridge {
     /// The Tauri handle once the app has attached it.
     ///
     /// A companion that owns windows and needs to present them from the
-    /// protocol thread uses this to schedule the actual window call on the
-    /// platform UI thread with [`AppHandle::run_on_main_thread`].
+    /// protocol thread uses this for read access. Window creation belongs on
+    /// [`Self::dispatch_window`], outside synchronous UI event handlers.
     pub fn app_handle(&self) -> Option<AppHandle> {
         self.app
             .lock()

@@ -152,3 +152,5 @@ Contributions are very welcome. Please read the [contributing guide](CONTRIBUTIN
 ## License
 
 BongoCat is open source under the [Apache License 2.0](LICENSE) license.
+
+Windows starts with ordinary permissions. Settings offers optional UAC restart; cancelling keeps the app running. If an older copy was configured to always run as administrator, inspect its Compatibility properties. Covered pet and plugin windows keep their background work running. Game-specific restrictions still apply; anti-cheat compatibility is not guaranteed. Use the complete installer to provide the offline plugin dependencies; the settings page offers WebView2 installation retry.

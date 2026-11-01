@@ -13,6 +13,7 @@ crate that depends on `bongocat-platform` is exactly the case it exists for.
 """
 
 import re
+import tomllib
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,10 +36,15 @@ def package_dependencies(crate: Path) -> set:
     manifest = crate / "Cargo.toml"
     if not manifest.is_file():
         return set()
-    source = manifest.read_text(encoding="utf-8")
-    # The package's own name is declared as `name = "..."`, which the dependency
-    # pattern does not match, so the set only ever holds real dependencies.
-    return set(DEPENDENCY.findall(source))
+    manifest = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    dependencies = set(manifest.get("dependencies", {}))
+    for target, fields in manifest.get("target", {}).items():
+        # Windows-only launch helpers cannot link Swift on macOS. Keep unknown
+        # conditions conservative; do not discard real macOS dependencies.
+        if target == 'cfg(target_os = "windows")' or "-windows-" in target:
+            continue
+        dependencies.update(fields.get("dependencies", {}))
+    return {name for name in dependencies if name.startswith("bongocat-")}
 
 
 def package_paths(root=None) -> dict:
@@ -89,6 +95,16 @@ def missing_rpath(root=None) -> list:
 
 
 class SwiftRuntimeRpathContractTests(unittest.TestCase):
+    def test_windows_only_dependencies_do_not_pull_swift_into_macos(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "fixture"\n'
+                '[target.\'cfg(target_os = "windows")\'.dependencies]\n'
+                'bongocat-platform.workspace = true\n', encoding="utf-8"
+            )
+            self.assertEqual(package_dependencies(root), set())
+
     def test_every_package_linking_swift_carries_the_rpath(self):
         reported = missing_rpath()
         self.assertEqual(reported, [], "\n".join(reported))

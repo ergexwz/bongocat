@@ -146,7 +146,7 @@ async function refresh() {
 }
 
 async function close() {
-  await getCurrentWindow().hide().catch(() => undefined)
+  await getCurrentWindow().destroy().catch(() => undefined)
 }
 
 function onKeydown(event: KeyboardEvent) {

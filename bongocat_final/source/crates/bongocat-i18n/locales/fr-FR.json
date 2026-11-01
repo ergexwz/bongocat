@@ -333,7 +333,9 @@
       "dock_icon_update_failed": "Impossible de mettre à jour l’icône du Dock.",
       "window_hide_failed": "La fenêtre des paramètres n’a pas pu être masquée",
       "window_layout_save_failed": "La disposition des fenêtres n’a pas pu être enregistrée",
-      "application_shutdown_failed": "BongoCat n’a pas pu se fermer complètement"
+      "application_shutdown_failed": "BongoCat n’a pas pu se fermer complètement",
+      "elevation_failed": "The same-account elevation handoff failed. Continue with ordinary permissions.",
+      "plugin_dependency_failed": "Restart with ordinary permissions and retry. If it still fails, reinstall using the complete installer with its offline runtime."
     }
   },
   "settings": {
@@ -562,6 +564,15 @@
         "unsupported_platform": "Le lancement au démarrage n’est pas disponible sur ce système",
         "unsupported_os": "Le lancement au démarrage n’est pas disponible sur ce système d’exploitation",
         "unsupported_build": "Le lancement au démarrage n’est pas disponible dans les versions de développement"
+      },
+      "elevation": {
+        "once": "Restart with administrator permissions once",
+        "request": "Request elevation",
+        "every_start": "Request UAC elevation on future starts",
+        "description": "Ordinary permissions are the default. Cancelling UAC keeps the app running. Same account only; elevation does not establish anti-cheat compatibility.",
+        "legacy": "Inspect legacy administrator compatibility settings",
+        "runtime": "Install or repair the plugin WebView2 runtime",
+        "open": "Open"
       }
     }
   },

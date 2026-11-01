@@ -341,6 +341,10 @@ fn build_single_instance_environment() -> SingleInstanceEnvironment {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    if let Some(result) = bongocat_platform::run_broker_if_requested() {
+        return result.map_err(Into::into);
+    }
     let run_options = match RunOptions::parse(env::args().skip(1)) {
         Ok(options) => options,
         Err(error) if error.help => {
@@ -351,6 +355,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(error) => return Err(Box::new(error)),
     };
+    #[cfg(target_os = "windows")]
+    if let Some(handoff) = &run_options.elevation_handoff {
+        bongocat_platform::accept_elevation_handoff(handoff)?;
+    }
+    #[cfg(target_os = "windows")]
+    if run_options.remove_startup_item {
+        let environment = match bongocat_app::BUILD_ENVIRONMENT {
+            bongocat_config::BuildEnvironment::Development => {
+                bongocat_platform::StartupItemEnvironment::Development
+            }
+            bongocat_config::BuildEnvironment::Production => {
+                bongocat_platform::StartupItemEnvironment::Production
+            }
+        };
+        bongocat_platform::set_startup_item_enabled(environment, false)?;
+        return Ok(());
+    }
     // The native surfaces that can only follow the *system* theme — the ComCtl32 alerts,
     // the Win32 menus and the shell file dialog — render dark only if the process asks
     // for it before the first window exists, so this is the earliest point that can ask.
@@ -415,6 +436,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
+    #[cfg(feature = "storage-test-injection")]
+    let mut application = if let Some(root) = &run_options.performance_smoke_root {
+        if cfg!(feature = "production")
+            || !root.is_absolute()
+            || !(1..=600).contains(&run_options.run_seconds)
+        {
+            return Err("resource profiling requires a development build, an absolute isolated root and 1..=600 seconds".into());
+        }
+        let layout = bongocat_config::StorageLayout::under(
+            root,
+            bongocat_config::BuildEnvironment::Development,
+        );
+        bongocat_app::Application::start_with_layout_for_smoke(layout, preset_root())?
+    } else {
+        bongocat_app::Application::start(preset_root())?
+    };
+    #[cfg(not(feature = "storage-test-injection"))]
     let mut application = bongocat_app::Application::start(preset_root())?;
     let application_log = application.log_handle();
     #[cfg(target_os = "windows")]
@@ -439,6 +477,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // consumer end before its first tick. A store that cannot be opened is not
     // fatal — the plugin center reports it and the cat still runs.
     let plugin_storage_root = application.storage_root().to_path_buf();
+    #[cfg(feature = "storage-test-injection")]
+    if run_options.performance_smoke_enabled() {
+        let stop = AtomicBool::new(false);
+        let offers = dev_plugins::source()
+            .discover(bongocat_app::PRODUCT_VERSION, &stop)
+            .map_err(io::Error::other)?;
+        if offers.len() != 3 {
+            return Err("resource profiling requires the three built companion packages".into());
+        }
+        let mut manager = bongocat_plugin_manager::PluginManager::new(
+            bongocat_plugin_service::plugin_directory(&plugin_storage_root),
+        )?;
+        manager.discover_plugins()?;
+        for offer in offers {
+            if manager.installed_version(&offer.metadata.id).as_deref()
+                != Some(&offer.metadata.version)
+            {
+                manager.install_verified(
+                    &offer.read(&stop).map_err(io::Error::other)?,
+                    &offer.digest,
+                )?;
+            }
+            manager.enable_plugin(&offer.metadata.id)?;
+        }
+        manager.shutdown()?;
+    }
     let plugin_runtime_client = application.runtime_client();
     let activity = plugin_runtime_client.subscribe_activity();
     let activity_client = plugin_runtime_client.clone();
@@ -505,6 +569,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // product windows exist, inside the GPUI run loop. The status is not persisted or
     // logged, exactly as before.
     let permission_language = application.effective_language();
+    #[cfg(target_os = "windows")]
+    let request_elevation_on_startup = application.config().system.request_elevation_on_startup;
     let permission_check_enabled = !run_options.automated_verification();
 
     let overlay_options = OverlaySessionOptions {
@@ -576,7 +642,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cursor_producer = application.cursor_producer();
     let gamepad_axis_producer = application.gamepad_axis_producer();
     let render_consumer = application.take_render_consumer()?;
-    let expect_visible_frame = true;
+    let expect_visible_frame = application.config().overlay.visible;
     let frame_runtime_client = runtime_client.clone();
     let frame_source_shutdown = FrameSourceShutdown::default();
     let failures = Arc::new(Mutex::new(Vec::new()));
@@ -917,6 +983,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let spawn_result = std::thread::Builder::new()
                 .name("bongocat-startup-permission".to_owned())
                 .spawn(move || {
+                    #[cfg(target_os = "windows")]
+                    if request_elevation_on_startup && bongocat_platform::request_elevation().unwrap_or(false) {
+                        permission_flow_quit_requested.store(true, Ordering::Release);
+                    }
                     let status = bongocat_app::ensure_startup_permission(permission_language);
                     if let bongocat_platform::StartupPermissionStatus::PermissionFlowRequested(
                         true,
@@ -1576,7 +1646,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             });
                         }
                     }
-                    if system_termination_requested {
+                    if system_termination_requested || cx.global::<ProductCoordinator>().main_thread_signals.take_quit_request() {
                         frame_shutdown_requested.store(true, Ordering::Release);
                     }
                     if frame_shutdown_requested.load(Ordering::Acquire) {

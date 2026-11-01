@@ -333,7 +333,9 @@
       "dock_icon_update_failed": "無法更新 Dock 圖示。",
       "window_hide_failed": "無法隱藏設定視窗",
       "window_layout_save_failed": "無法儲存視窗版面配置",
-      "application_shutdown_failed": "BongoCat 未能完全關閉"
+      "application_shutdown_failed": "BongoCat 未能完全關閉",
+      "elevation_failed": "未能完成当前账号的提权交接，将继续以普通权限运行。",
+      "plugin_dependency_failed": "请以普通权限启动后重试；若仍失败，请重新安装包含离线运行库的完整安装包。"
     }
   },
   "settings": {
@@ -562,6 +564,15 @@
         "unsupported_platform": "目前系統不支援開機自動啟動",
         "unsupported_os": "目前作業系統不支援開機自動啟動",
         "unsupported_build": "開發版本不支援開機自動啟動"
+      },
+      "elevation": {
+        "once": "仅本次以管理员权限重启",
+        "request": "请求提权",
+        "every_start": "以后每次启动时请求 UAC 提权",
+        "description": "默认普通权限运行；取消 UAC 后继续运行。仅支持当前账号，提权不代表通过游戏反作弊验证。",
+        "legacy": "检查旧版管理员兼容性设置",
+        "runtime": "安装或修复插件 WebView2 运行库",
+        "open": "打开"
       }
     }
   },

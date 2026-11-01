@@ -1,20 +1,23 @@
 //! One owned process with bounded request/response exchanges.
+#[cfg(target_os = "windows")]
+use bongocat_platform::PluginProcess;
 use bongocat_plugin_sdk::{
     Capability, HostMessage, PROTOCOL_VERSION, PluginMetadata, PluginOutput, Request, Response,
     UiNode, read_frame, write_frame,
 };
+#[cfg(not(target_os = "windows"))]
+use std::process::Child as PluginProcess;
 use std::{
     io,
     path::Path,
-    process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 pub(crate) struct Process {
-    child: Child,
-    input: Option<ChildStdin>,
+    child: PluginProcess,
+    input: Option<Box<dyn io::Write + Send>>,
     responses: Receiver<io::Result<Response>>,
     reader: Option<JoinHandle<()>>,
     sequence: u64,
@@ -36,21 +39,25 @@ impl Process {
             .map(|plugin_dir| plugin_dir.join(crate::DATA_DIRECTORY).join(&metadata.id))
             .unwrap_or_else(|| root.join("data"));
         std::fs::create_dir_all(&data_dir)?;
-        let mut command = Command::new(entry_path(root, &metadata.entry));
-        command
-            .current_dir(root)
-            .env("BONGOCAT_PLUGIN_DATA_DIR", &data_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-
         #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        let mut child = command.spawn()?;
+        let mut child = PluginProcess::spawn(&entry_path(root, &metadata.entry), root, &data_dir)?;
+        #[cfg(target_os = "windows")]
         let input = child.stdin.take();
+        #[cfg(not(target_os = "windows"))]
+        let (mut child, input) = {
+            let mut child = std::process::Command::new(entry_path(root, &metadata.entry))
+                .current_dir(root)
+                .env("BONGOCAT_PLUGIN_DATA_DIR", &data_dir)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()?;
+            let input = child
+                .stdin
+                .take()
+                .map(|input| Box::new(input) as Box<dyn io::Write + Send>);
+            (child, input)
+        };
         let mut output = child
             .stdout
             .take()

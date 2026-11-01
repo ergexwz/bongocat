@@ -83,6 +83,8 @@ pub(super) fn settings_error(language: SettingsLanguage, error: SettingsError) -
         SettingsErrorCode::RuntimeUnavailable => "errors.settings.setting_not_applied",
         SettingsErrorCode::InvalidShortcutBindings => "errors.settings.invalid_shortcut_bindings",
         SettingsErrorCode::ConfigPersistFailed => "errors.settings.setting_save_failed",
+        SettingsErrorCode::PluginDependencyFailed => "errors.settings.plugin_dependency_failed",
+        SettingsErrorCode::ElevationFailed => "errors.settings.elevation_failed",
         SettingsErrorCode::ConfigPermissionDenied => "errors.settings.config_permission_denied",
         SettingsErrorCode::ConfigStorageFull => "errors.settings.config_storage_full",
         SettingsErrorCode::ConfigTargetOccupied => "errors.settings.config_target_occupied",

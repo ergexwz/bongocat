@@ -164,3 +164,11 @@ pub fn reconcile_startup_item(
 ) -> Result<bool, StartupItemError> {
     startup_item_native::reconcile(environment)
 }
+
+mod plugin_process;
+pub use plugin_process::PluginProcess;
+#[cfg(target_os = "windows")]
+pub use plugin_process::{
+    accept_elevation_handoff, is_elevated, open_windows_permission_settings,
+    repair_windows_plugin_runtime, request_elevation, run_broker_if_requested,
+};

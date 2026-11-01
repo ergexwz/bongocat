@@ -16,6 +16,24 @@ impl<T> SettingsReply<T> {
 }
 
 pub enum SettingsCommand {
+    #[cfg(target_os = "windows")]
+    OpenWindowsPermissionSettings {
+        reply: SettingsReply<Result<SettingsSnapshot, SettingsError>>,
+    },
+    #[cfg(target_os = "windows")]
+    RepairWindowsPluginRuntime {
+        reply: SettingsReply<Result<SettingsSnapshot, SettingsError>>,
+    },
+    #[cfg(target_os = "windows")]
+    RequestWindowsElevation {
+        reply: SettingsReply<Result<SettingsSnapshot, SettingsError>>,
+    },
+    #[cfg(target_os = "windows")]
+    SetRequestElevationOnStartup {
+        expected_config_revision: u64,
+        enabled: bool,
+        reply: SettingsReply<Result<SettingsSnapshot, SettingsError>>,
+    },
     SettingsWindowPlacementChanged,
     OverlayWindowPlacementChanged {
         x: i32,

@@ -131,7 +131,7 @@ fn service_executes_application_shortcuts_from_the_platform_handoff() {
         std::thread::yield_now();
     };
     assert!(!updated.overlay_visible);
-    assert_eq!(updated.config_revision, initial.config_revision);
+    assert_ne!(updated.config_revision, initial.config_revision);
     drop(sender);
     client.shutdown_blocking().expect("shutdown service");
     service.join().expect("join service");

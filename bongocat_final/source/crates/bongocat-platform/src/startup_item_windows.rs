@@ -245,11 +245,7 @@ pub(super) fn set_enabled(
         }
     }
     let executable = current_executable()?;
-    let run_level = if crate::startup_permission_available() {
-        TaskRunLevel::Highest
-    } else {
-        TaskRunLevel::Least
-    };
+    let run_level = TaskRunLevel::Least;
     register_task(&backend, &executable, run_level)
 }
 
@@ -285,16 +281,11 @@ pub(super) fn reconcile(environment: StartupItemEnvironment) -> Result<bool, Sta
     if registered
         .as_deref()
         .is_some_and(|registered| same_executable(registered, &current))
+        && run_level == Some(TaskRunLevel::Least)
     {
         return Ok(false);
     }
-    let run_level = run_level.unwrap_or_else(|| {
-        if crate::startup_permission_available() {
-            TaskRunLevel::Highest
-        } else {
-            TaskRunLevel::Least
-        }
-    });
+    let run_level = TaskRunLevel::Least;
     register_task(&backend, &current, run_level)?;
     Ok(true)
 }

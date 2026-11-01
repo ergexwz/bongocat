@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -342,36 +342,18 @@ onMounted(async () => {
     }
   })
 
-  if (view === 'runtime') {
-    await invoke('mail_reconnect_all')
-    await listen('mail://new-mail', async ({ payload }: { payload: any }) => {
-      const inserted = await invoke<boolean>('mail_record_new', { payload })
-      await hydrate()
-      if (inserted && settings.value.bubbleEnabled) {
-        await emit('mail://show-bubble', payload)
-      }
-    })
-    await listen('mail://connection-status', async ({ payload }: { payload: any }) => {
-      await invoke('mail_record_status', { payload })
-      await hydrate()
-    })
-    await listen('mail://last-seen-uid', async ({ payload }: { payload: any }) => {
-      await invoke('mail_record_last_seen', { payload })
-    })
-    await listen('mail://state', async () => {
-      await hydrate()
-    })
-    return
-  }
 
   await listen('mail://state', async () => {
     await hydrate()
   })
 
   if (view === 'bubble') {
-    await listen('mail://show-bubble', ({ payload }: { payload: any }) => {
-      addBubble(payload)
+    await listen('mail://show-bubble', async () => {
+      const pending = await invoke<Array<any>>('take_pending_mail_bubbles')
+      for (const payload of pending) addBubble(payload)
     })
+    const pending = await invoke<Array<any>>('take_pending_mail_bubbles')
+    for (const payload of pending) addBubble(payload)
   }
 
   const pending = await invoke<string | null>('take_pending_open', { view })

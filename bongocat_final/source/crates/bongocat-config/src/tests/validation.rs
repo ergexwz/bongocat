@@ -1174,3 +1174,48 @@ fn motion_overlap_defaults_off_for_existing_v1_documents_and_round_trips() {
     let bytes = serde_json::to_vec(&enabled).expect("serialize configuration");
     assert_eq!(parse_config(&bytes).expect("read configuration").0, enabled);
 }
+
+#[test]
+fn old_v1_config_defaults_to_ordinary_windows_permissions() {
+    let mut document = serde_json::to_value(NativeConfig::default()).unwrap();
+    document["system"]
+        .as_object_mut()
+        .unwrap()
+        .remove("request_elevation_on_startup");
+    let config = parse_config(&serde_json::to_vec(&document).unwrap())
+        .unwrap()
+        .0;
+    assert!(!config.system.request_elevation_on_startup);
+    document["system"]["request_elevation_on_startup"] = serde_json::json!(true);
+    assert!(
+        parse_config(&serde_json::to_vec(&document).unwrap())
+            .unwrap()
+            .0
+            .system
+            .request_elevation_on_startup
+    );
+}
+
+#[test]
+fn old_v1_config_defaults_to_visible_overlay_and_accepts_saved_hide() {
+    let mut document = serde_json::to_value(NativeConfig::default()).unwrap();
+    document["overlay"]
+        .as_object_mut()
+        .unwrap()
+        .remove("visible");
+    let config = parse_config(&serde_json::to_vec(&document).unwrap())
+        .unwrap()
+        .0;
+    assert!(config.overlay.visible);
+    document["overlay"]["visible"] = serde_json::json!(false);
+    let config = parse_config(&serde_json::to_vec(&document).unwrap())
+        .unwrap()
+        .0;
+    assert!(!config.overlay.visible);
+    assert_eq!(
+        parse_config(&serde_json::to_vec(&config).unwrap())
+            .unwrap()
+            .0,
+        config
+    );
+}

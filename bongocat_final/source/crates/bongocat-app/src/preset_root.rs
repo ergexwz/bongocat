@@ -8,11 +8,26 @@
 use super::*;
 
 pub(crate) fn preset_root() -> PathBuf {
-    if let Ok(executable) = env::current_exe()
-        && let Some(root) = bundled_preset_root(&executable)
-        && root.is_dir()
+    let executable = env::current_exe().expect("resolve the product executable");
+    preset_root_for_executable(&executable, bongocat_app::BUILD_ENVIRONMENT)
+}
+
+pub(super) fn preset_root_for_executable(
+    executable: &Path,
+    environment: bongocat_config::BuildEnvironment,
+) -> PathBuf {
+    if let Some(root) = bundled_preset_root(executable)
+        && (root.is_dir() || environment == bongocat_config::BuildEnvironment::Production)
     {
         return root;
+    }
+    // A broken installer must surface missing resources, even on the build
+    // machine. Production never falls back to an absolute developer checkout.
+    if environment == bongocat_config::BuildEnvironment::Production {
+        return executable
+            .parent()
+            .expect("executable directory")
+            .join("resources/models");
     }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()

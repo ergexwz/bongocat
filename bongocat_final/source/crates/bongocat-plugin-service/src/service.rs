@@ -490,6 +490,9 @@ fn run(
     if let Err(failure) = manager.discover_plugins() {
         error = Some(failure.to_string());
     }
+    if let Err(failure) = source.install_bundled(&mut manager, env!("CARGO_PKG_VERSION"), &stop) {
+        error = Some(failure);
+    }
     // Resume failures are represented by each affected card's Failed state.
     let _ = manager.resume_enabled();
     let last_input_activity = input_activity

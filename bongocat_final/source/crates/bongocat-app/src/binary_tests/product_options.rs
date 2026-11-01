@@ -8,6 +8,12 @@ fn run_options_default_to_an_unbounded_product_lifetime() {
     assert_eq!(
         options,
         RunOptions {
+            #[cfg(feature = "storage-test-injection")]
+            performance_smoke_root: None,
+            #[cfg(target_os = "windows")]
+            elevation_handoff: None,
+            #[cfg(target_os = "windows")]
+            remove_startup_item: false,
             run_seconds: 0,
             #[cfg(target_os = "windows")]
             single_instance_ready_file: None,
@@ -110,6 +116,8 @@ fn only_the_bounded_run_duration_keeps_a_start_interactive() {
         "--diagnostics-export-smoke",
         #[cfg(feature = "storage-test-injection")]
         "--diagnostics-export-failure-smoke",
+        #[cfg(feature = "storage-test-injection")]
+        "--performance-smoke-root",
         #[cfg(target_os = "macos")]
         "--application-reopen-smoke",
         #[cfg(target_os = "macos")]
@@ -126,7 +134,7 @@ fn only_the_bounded_run_duration_keeps_a_start_interactive() {
     let declared: BTreeSet<String> = <RunOptions as clap::CommandFactory>::command()
         .get_arguments()
         .filter_map(|argument| argument.get_long())
-        .filter(|flag| *flag != "run-seconds")
+        .filter(|flag| !["run-seconds", "elevation-handoff", "remove-startup-item"].contains(flag))
         .map(str::to_owned)
         .collect();
     assert_eq!(
@@ -142,7 +150,7 @@ fn only_the_bounded_run_duration_keeps_a_start_interactive() {
         // The single-instance markers need a value and a companion flag, so parsing
         // one on its own would only prove `clap` rejects it. They are covered by the
         // dedicated tests below instead.
-        if flag.starts_with("--single-instance-") {
+        if flag.starts_with("--single-instance-") || *flag == "--performance-smoke-root" {
             continue;
         }
         assert!(

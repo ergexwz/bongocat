@@ -26,3 +26,16 @@ fn executable_relative_preset_models_resolve_next_to_a_product_executable() {
         Some(PathBuf::from("/Applications/BongoCat/resources/models"))
     );
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn a_missing_production_bundle_never_uses_the_developer_checkout() {
+    let executable = Path::new("C:\\用户安装 目录\\BongoCat\\bongocat-app.exe");
+    assert_eq!(
+        crate::preset_root::preset_root_for_executable(
+            executable,
+            bongocat_config::BuildEnvironment::Production
+        ),
+        PathBuf::from("C:\\用户安装 目录\\BongoCat\\resources\\models")
+    );
+}

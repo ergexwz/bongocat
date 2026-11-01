@@ -28,6 +28,12 @@ pub(crate) fn source() -> PluginSource {
             }
         }
         BuildEnvironment::Production => PluginSource::Production {
+            bundled_catalog_sha256: option_env!("BONGOCAT_BUNDLED_CATALOG_SHA256")
+                .filter(|pin| !pin.is_empty())
+                .map(str::to_owned),
+            bundled_directory: std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|p| p.join("resources/bundled-plugins"))),
             owner: bongocat_update::PLUGIN_REPOSITORY_OWNER.into(),
             repository: bongocat_update::PLUGIN_REPOSITORY_NAME.into(),
             public_key: bongocat_update::PLUGIN_RELEASE_SIGNING_KEY.into(),
@@ -55,6 +61,7 @@ mod tests {
                 repository,
                 platform,
                 public_key,
+                ..
             } => {
                 assert_eq!(owner, "ayangweb");
                 assert_eq!(repository, "BongoCat-Plugins");

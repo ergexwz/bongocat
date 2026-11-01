@@ -29,6 +29,16 @@ pub(crate) const PROGRAM_NAME: &str = "bongocat-app";
                   --run-seconds value enables a bounded diagnostic run."
 )]
 pub(crate) struct RunOptions {
+    /// Isolated resource-profile root; unavailable in ordinary release builds.
+    #[cfg(feature = "storage-test-injection")]
+    #[arg(long, hide = true)]
+    pub(crate) performance_smoke_root: Option<PathBuf>,
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    pub(crate) elevation_handoff: Option<String>,
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    pub(crate) remove_startup_item: bool,
     /// Run for this many seconds instead of until the product is quit.
     ///
     /// Zero is the default and means the same unbounded lifetime as passing nothing.
@@ -172,8 +182,19 @@ impl RunOptions {
     /// exactly when one of the harness flags is present. The startup permission prompt
     /// hangs on it: a harness is launched by a script on a machine where nobody can
     /// answer a native dialog.
+    pub(crate) fn performance_smoke_enabled(&self) -> bool {
+        #[cfg(feature = "storage-test-injection")]
+        {
+            self.performance_smoke_root.is_some()
+        }
+        #[cfg(not(feature = "storage-test-injection"))]
+        {
+            false
+        }
+    }
     pub(crate) fn automated_verification(&self) -> bool {
-        self.settings_window_smoke
+        self.performance_smoke_enabled()
+            || self.settings_window_smoke
             || self.settings_window_open_smoke
             || self.models_page_smoke
             || self.hidden_model_switch_smoke

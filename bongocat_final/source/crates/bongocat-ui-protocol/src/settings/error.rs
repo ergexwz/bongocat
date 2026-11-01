@@ -7,6 +7,8 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsErrorCode {
     ServiceUnavailable,
+    ElevationFailed,
+    PluginDependencyFailed,
     SnapshotOutdated,
     RuntimeUnavailable,
     InvalidShortcutBindings,
@@ -51,8 +53,10 @@ pub enum SettingsErrorCode {
 }
 
 impl SettingsErrorCode {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 44] = [
         Self::ServiceUnavailable,
+        Self::ElevationFailed,
+        Self::PluginDependencyFailed,
         Self::SnapshotOutdated,
         Self::RuntimeUnavailable,
         Self::InvalidShortcutBindings,
@@ -98,6 +102,8 @@ impl SettingsErrorCode {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::PluginDependencyFailed => "plugin_dependency_failed",
+            Self::ElevationFailed => "elevation_failed",
             Self::ServiceUnavailable => "service_unavailable",
             Self::SnapshotOutdated => "snapshot_outdated",
             Self::RuntimeUnavailable => "runtime_unavailable",
@@ -163,6 +169,12 @@ impl SettingsError {
 impl SettingsError {
     pub(crate) fn message(&self) -> &'static str {
         match self.code {
+            SettingsErrorCode::PluginDependencyFailed => {
+                "Restart with ordinary permissions and retry. If it still fails, reinstall using the complete installer with its offline runtime."
+            }
+            SettingsErrorCode::ElevationFailed => {
+                "The same-account elevation handoff failed. Continue with ordinary permissions."
+            }
             SettingsErrorCode::ServiceUnavailable => "Settings service is unavailable",
             SettingsErrorCode::SnapshotOutdated => {
                 "Settings changed elsewhere. Review the latest settings and try again."

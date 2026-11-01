@@ -41,6 +41,8 @@ pub(crate) enum PendingOperation {
     ToggleRepeatedExpression,
     AllowMotionOverlap,
     StartupItem,
+    #[cfg(target_os = "windows")]
+    WindowsElevation,
     ModelSelection,
     ModelDeletion,
     ModelMetadata,
@@ -176,6 +178,17 @@ pub(crate) enum SettingValue {
         name: String,
     },
     StartupItemEnabled(bool),
+    #[cfg(target_os = "windows")]
+    RequestWindowsElevation,
+    #[cfg(target_os = "windows")]
+    OpenWindowsPermissionSettings,
+    #[cfg(target_os = "windows")]
+    RepairWindowsPluginRuntime,
+    #[cfg(target_os = "windows")]
+    RequestElevationOnStartup {
+        expected_config_revision: u64,
+        enabled: bool,
+    },
     Shortcuts {
         expected_config_revision: u64,
         shortcuts: SettingsShortcuts,

@@ -52,6 +52,7 @@ pub(crate) struct PluginLayer {
     pub(crate) shader_resource: ID3D11ShaderResourceView,
     pub(crate) vertex_buffer: ID3D11Buffer,
     pub(crate) transform: [f32; 4],
+    size: (u32, u32),
 }
 
 /// Draw one plugin layer into a window, against the window's live buffer size.
@@ -71,7 +72,7 @@ pub(crate) unsafe fn upload_plugin_layer(
     unsafe {
         renderer
             .model
-            .set_plugin_layer(&renderer.device, layer, width, height)
+            .set_plugin_layer(&renderer.device, &renderer.context, layer, width, height)
     }
 }
 
@@ -85,6 +86,7 @@ impl GpuModel {
     pub(crate) unsafe fn set_plugin_layer(
         &mut self,
         device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
         layer: Option<&bongocat_plugin_hud::HudLayer>,
         width: u32,
         height: u32,
@@ -96,6 +98,32 @@ impl GpuModel {
             self.plugin_layer = None;
             return Ok(());
         };
+        if let Some(current) = &mut self.plugin_layer
+            && current.size == (layer.width, layer.height)
+        {
+            // SAFETY: the session confines the immediate context to this thread;
+            // UpdateSubresource copies the borrowed pixels before returning.
+            unsafe {
+                context.UpdateSubresource(
+                    &current._texture,
+                    0,
+                    None,
+                    layer.pixels.as_ptr().cast(),
+                    layer.width * 4,
+                    0,
+                );
+                context.UpdateSubresource(
+                    &current.vertex_buffer,
+                    0,
+                    None,
+                    layer.quad_vertices().as_ptr().cast(),
+                    0,
+                    0,
+                );
+            }
+            current.transform = layer.clip_transform();
+            return Ok(());
+        }
         let texture = unsafe {
             create_texture_resource(
                 device,
@@ -114,6 +142,7 @@ impl GpuModel {
             shader_resource: texture.shader_resource,
             vertex_buffer,
             transform: layer.clip_transform(),
+            size: (layer.width, layer.height),
         });
         Ok(())
     }
@@ -135,20 +164,38 @@ impl GpuModel {
                 unsafe { load_texture(device, context, asset) }.map(|texture| (asset.id, texture))
             })
             .collect::<WindowsResult<BTreeMap<_, _>>>()?;
-        let key_textures = resources
-            .key_assets
-            .iter()
-            .map(|asset| {
-                let texture = TextureAsset {
-                    id: TextureId::new(asset.id.index()),
-                    path: asset.path.clone(),
-                    width: asset.width,
-                    height: asset.height,
-                };
-                unsafe { load_texture(device, context, &texture) }
-                    .map(|texture| (asset.id, texture))
-            })
-            .collect::<WindowsResult<BTreeMap<_, _>>>()?;
+        let mut key_textures = BTreeMap::new();
+        let mut key_overlay_buffers = BTreeMap::new();
+        let canvas_bounds = ModelBounds::from_canvas(snapshot.canvas);
+        for asset in &resources.key_assets {
+            let mut image = decode_texture(&asset.path, asset.width, asset.height)?;
+            let crop = key_alpha_crop(&image);
+            let bounds = cropped_key_bounds(
+                legacy_key_overlay_bounds(canvas_bounds, asset.width, asset.height),
+                asset.width,
+                asset.height,
+                crop,
+            );
+            let mut image =
+                image::imageops::crop(&mut image, crop.0, crop.1, crop.2, crop.3).to_image();
+            premultiply_alpha(&mut image);
+            let texture = unsafe {
+                create_mipmapped_texture_resource(
+                    device,
+                    context,
+                    crop.2,
+                    crop.3,
+                    MODEL_TEXTURE_FORMAT,
+                    image.as_ptr(),
+                    crop.2 * 4,
+                )
+            }?;
+            key_textures.insert(asset.id, texture);
+            let vertices = quad_vertices(bounds);
+            key_overlay_buffers.insert(asset.id, unsafe {
+                create_buffer(device, &vertices, D3D11_BIND_VERTEX_BUFFER.0 as u32)?
+            });
+        }
         let background = resources
             .background
             .as_ref()
@@ -165,18 +212,6 @@ impl GpuModel {
                 )
             })
             .transpose()?;
-        let canvas_bounds = ModelBounds::from_canvas(snapshot.canvas);
-        let mut key_overlay_buffers = BTreeMap::new();
-        for asset in &resources.key_assets {
-            let vertices = quad_vertices(legacy_key_overlay_bounds(
-                canvas_bounds,
-                asset.width,
-                asset.height,
-            ));
-            let buffer =
-                unsafe { create_buffer(device, &vertices, D3D11_BIND_VERTEX_BUFFER.0 as u32)? };
-            key_overlay_buffers.insert(asset.id, buffer);
-        }
         let background_vertices = quad_vertices(canvas_bounds);
         let background_indices = [0_u16, 1, 2, 0, 2, 3];
         let mut meshes = Vec::with_capacity(snapshot.drawables.len());
@@ -361,16 +396,7 @@ pub(crate) unsafe fn load_texture(
     context: &ID3D11DeviceContext,
     asset: &TextureAsset,
 ) -> WindowsResult<TextureResource> {
-    let mut image = ImageReader::open(&asset.path)
-        .map_err(|error| Error::new(HRESULT(0x80004005_u32 as i32), error.to_string()))?
-        .decode()
-        .map_err(|error| Error::new(HRESULT(0x80004005_u32 as i32), error.to_string()))?
-        .into_rgba8();
-    if image.width() != asset.width || image.height() != asset.height {
-        return Err(invariant_error(
-            "texture dimensions changed after validation",
-        ));
-    }
+    let mut image = decode_texture(&asset.path, asset.width, asset.height)?;
     premultiply_alpha(&mut image);
     unsafe {
         create_mipmapped_texture_resource(
@@ -382,6 +408,63 @@ pub(crate) unsafe fn load_texture(
             image.as_ptr(),
             asset.width.saturating_mul(4),
         )
+    }
+}
+
+fn decode_texture(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+) -> WindowsResult<image::RgbaImage> {
+    let image = ImageReader::open(path)
+        .map_err(|error| Error::new(HRESULT(0x80004005_u32 as i32), error.to_string()))?
+        .decode()
+        .map_err(|error| Error::new(HRESULT(0x80004005_u32 as i32), error.to_string()))?
+        .into_rgba8();
+    if image.width() != width || image.height() != height {
+        return Err(invariant_error(
+            "texture dimensions changed after validation",
+        ));
+    }
+    Ok(image)
+}
+
+/// Keep every nonzero alpha texel, including faint edges, plus a transparent
+/// filtering border. A completely transparent key needs only one transparent texel.
+pub(crate) fn key_alpha_crop(image: &image::RgbaImage) -> (u32, u32, u32, u32) {
+    let (mut left, mut top, mut right, mut bottom) = (image.width(), image.height(), 0, 0);
+    for (x, y, pixel) in image.enumerate_pixels() {
+        if pixel[3] != 0 {
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x + 1);
+            bottom = bottom.max(y + 1);
+        }
+    }
+    if right == 0 {
+        return (0, 0, 1, 1);
+    }
+    left = left.saturating_sub(2);
+    top = top.saturating_sub(2);
+    right = right.saturating_add(2).min(image.width());
+    bottom = bottom.saturating_add(2).min(image.height());
+    (left, top, right - left, bottom - top)
+}
+
+pub(crate) fn cropped_key_bounds(
+    bounds: ModelBounds,
+    width: u32,
+    height: u32,
+    crop: (u32, u32, u32, u32),
+) -> ModelBounds {
+    let dx = bounds.width() / width as f32;
+    let dy = bounds.height() / height as f32;
+    // PNG rows start at the top; the vertex shader flips V into model space.
+    ModelBounds {
+        min_x: bounds.min_x + crop.0 as f32 * dx,
+        max_x: bounds.min_x + (crop.0 + crop.2) as f32 * dx,
+        min_y: bounds.max_y - (crop.1 + crop.3) as f32 * dy,
+        max_y: bounds.max_y - crop.1 as f32 * dy,
     }
 }
 

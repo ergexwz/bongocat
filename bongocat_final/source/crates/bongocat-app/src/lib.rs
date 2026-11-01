@@ -68,10 +68,18 @@ pub(crate) use tests::repository_preset_root;
 #[derive(Clone, Default)]
 pub struct ApplicationMainThreadSignals {
     open_settings: Arc<AtomicBool>,
+    quit_requested: Arc<AtomicBool>,
     cover_captures: Arc<Mutex<VecDeque<CoverCaptureRequest>>>,
 }
 
 impl ApplicationMainThreadSignals {
+    pub fn request_quit(&self) {
+        self.quit_requested.store(true, Ordering::Release);
+    }
+    pub fn take_quit_request(&self) -> bool {
+        self.quit_requested.swap(false, Ordering::AcqRel)
+    }
+
     pub fn request_open_settings(&self) {
         self.open_settings.store(true, Ordering::Release);
     }

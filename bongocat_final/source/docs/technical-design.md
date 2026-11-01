@@ -830,14 +830,11 @@ Windows 验收覆盖 PixPin `Ctrl+Alt+A`、Win+L、PrintScreen、UAC、管理员
   才移回显示器内，期间任何被观测到的位移都重新计时，因此跨显示器拖拽不会被打断。约束缓存最多
   `500ms` 复用一次放置检查，显示器变化（含拔掉外接屏）在静止窗口下也会被重新评估并纠正。关闭时
   不执行该收敛，但完全离开现存显示器的持久化 bounds 仍按 state 恢复规则回退。
-  `always_on_top` 不是一次性的 `SetWindowPos`：topmost 波段成员资格由 user32 维护，而
-  `SetWindowPos` 明确规定「topmost 窗口被排到任何非 topmost 窗口之后即不再是 topmost」，且该
-  转换没有任何通知。因此窗口在创建/配置变化时进入波段后，`show` 与每帧 tick 都会校验
-  `WS_EX_TOPMOST` 位及其与前台 topmost 窗口的实际 Z 顺序；丢失成员资格或前台窗口排到模型之前时，
-  以 `SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE` 重新断言（ADR-0096）。普通前台窗口只需读取样式，
-  topmost 前台窗口通过同步 `EnumWindows` 检查顺序，不逐帧无条件抬升，也不压过本来就在模型上方的
-  菜单或提示。不移动、不缩放、不抢焦点，也不与用户已关闭的开关对抗（开关值随窗口状态
-  记录，tick 读同一份）。Z 序之外还有合成层：桌宠窗口在宠物模式下**始终**带
+  `always_on_top` 在创建窗口或用户主动切换设置时设置普通窗口层级；显示恢复和每帧 tick
+  不检查或恢复前台相对 Z 序，不争抢层级、不抢焦点。被覆盖时输入和插件业务继续运行，
+  保存的置顶偏好不变（ADR-0100）。用户显式选择的显隐状态通过 `overlay.visible` 原子保存，
+  重启后恢复；旧配置缺字段默认显示，悬停、空闲隐藏和游戏遮挡不改写该偏好。
+  Z 序之外还有合成层：桌宠窗口在宠物模式下**始终**带
   `WS_EX_LAYERED`（`WS_EX_NOREDIRECTIONBITMAP` 与 DirectComposition visual 保留），
   因为 DWM 必定合成可见的 layered 顶层窗口，由 DWM 合成的无边框/窗口化全屏游戏无法再用
   DirectFlip/独立翻转绕过桌宠；鼠标穿透只切换 `WS_EX_TRANSPARENT`，关闭穿透不清除 layered 位
@@ -858,22 +855,24 @@ Windows 验收覆盖 PixPin `Ctrl+Alt+A`、Win+L、PrintScreen、UAC、管理员
   `resources/icons/tray-windows.png` 解码；托盘隐藏点击恢复和 overlay 右键入口均由该唯一菜单 owner
   管理，overlay 弹出使用自身 HWND，不借用托盘隐藏窗口。共用菜单根包含设置入口、模型窗口操作分组（显隐、
   穿透、置顶、鼠标移入隐藏）、可用的更新入口和退出。
-- 启动项：Windows 使用当前用户的交互式登录计划任务，显式启用时按当前权限设置运行级别；
-  已提权进程注册 HighestAvailable，未提权进程注册 LeastPrivilege（ADR-0095）。macOS 由
+- 启动项：Windows 使用当前用户的交互式登录计划任务，始终注册 LeastPrivilege，
+  包括移动路径的修复及旧高权限任务迁移（ADR-0100）。macOS 由
   `auto-launch 0.6.0` 写 `~/Library/LaunchAgents/{app_name}.plist`
   （`RunAtLoad`）。Production 使用该后端；命令固定为当前 executable 加 `--run-seconds 0`，
   默认不要求管理员权限或 TCC 授权；已设置管理员运行的应用须以管理员身份启用启动项（ADR-0095）。
   读取任务状态时同时比较任务 Action 指向的 executable 与当前 executable：已启用但路径不同
-  汇报 `Stale`；Production 启动时在单实例检查之前把已启用任务更新到当前 executable，并保留
-  原 RunLevel（ADR-0095）。该能力只属于已发布的产品：开发构建的可执行文件是
+  汇报 `Stale`；Production 启动时在单实例检查之前把已启用任务更新到当前 executable，并使用
+  LeastPrivilege（ADR-0100）。该能力只属于已发布的产品：开发构建的可执行文件是
   构建产物而非已安装应用，所以 `bongocat-app` 按构建环境判定，开发构建直接汇报
   `Unsupported(BuildEnvironment)`、不触碰平台，设置里的启动项整行按统一禁用样式置灰，并保留可见的 `unsupported_build` 文案（ADR-0051）。
-- 启动权限：产品启动时以自身进程令牌的 `TokenElevation` 判断是否已提权，未提权时用 `rfd` 的
-  原生系统弹框说明「属性 → 兼容性 → 勾选以管理员身份运行此程序」路径，并提供定位当前
-  executable 的操作。检查非阻塞：主线程完成窗口、菜单栏等正常初始化后，由专用 worker 线程
-  执行检查与提示，提示未应答或被关闭不影响任何产品窗口（ADR-0032「非阻塞执行修正」）。
-  产品不原地提权、不写 HKCU/HKLM、不注册 service，提示也不持久化任何状态；
-  每次启动重新读取真实令牌状态，已提权则完全不提示（ADR-0032）。
+- 启动权限：默认普通权限运行，不自动弹出管理员建议。设置提供仅本次 UAC 重启与以后启动时
+  请求 UAC 的偏好；取消后保留普通进程。同账号/会话及可执行文件握手完成后，旧进程正常保存退出。
+  提权宿主通过经验证的普通权限代理运行插件，降权失败不启动插件；插件协议保持不变。
+  旧兼容性设置由用户主动打开 Windows 属性检查，不写系统安全设置（ADR-0100）。
+- 内存：按键纹理加载时裁透明边并保留滤波边界，按原画布坐标绘制；同尺寸 HUD 更新复用 GPU 资源。
+  明确隐藏、最小化和 DXGI 遮挡不进行无用绘制，输入和业务计时持续。
+  伴随插件窗口按需创建、关闭销毁，Rust 后台持有计数、通知、邮件和持久化；不预建隐藏运行网页。
+  发布前分别计量宿主、插件及 WebView2 进程，并将 GPU 与私有提交内存分开报告（ADR-0100）。
 
 ### 10.2 macOS
 

@@ -450,11 +450,7 @@ impl ProductOverlaySession {
         // swap chain and the mask targets follow here, before anything draws
         // against them.
         let minimized = unsafe { IsIconic(self.overlay.window.hwnd) }.as_bool();
-        // Recover demotion and a foreground app moving ahead within the topmost
-        // band, without raising on every frame or taking keyboard focus.
-        if !minimized && self.overlay.window.is_always_on_top() {
-            self.overlay.window.ensure_topmost()?;
-        }
+        // Respect other applications' window order; background input stays active.
         if !minimized {
             self.overlay.sync_window_size()?;
         }

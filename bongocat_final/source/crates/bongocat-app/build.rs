@@ -9,6 +9,14 @@ use std::path::{Path, PathBuf};
 const WINDOWS_RESOURCE_FILE: &str = "windows/bongocat-app.rc";
 
 fn main() {
+    println!("cargo::rerun-if-env-changed=BONGOCAT_BUNDLED_CATALOG_SHA256");
+    let bundled_pin = std::env::var("BONGOCAT_BUNDLED_CATALOG_SHA256").unwrap_or_default();
+    assert!(
+        bundled_pin.is_empty()
+            || (bundled_pin.len() == 64 && bundled_pin.bytes().all(|c| c.is_ascii_hexdigit())),
+        "invalid bundled catalog build pin"
+    );
+    println!("cargo::rustc-env=BONGOCAT_BUNDLED_CATALOG_SHA256={bundled_pin}");
     println!("cargo::rerun-if-changed=src/product_icon_contract.rs");
     link_swift_runtime();
 

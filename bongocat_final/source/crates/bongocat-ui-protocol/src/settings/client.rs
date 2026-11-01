@@ -463,6 +463,37 @@ impl SettingsClient {
         .await
     }
 
+    #[cfg(target_os = "windows")]
+    pub async fn open_windows_permission_settings(
+        &self,
+    ) -> Result<SettingsSnapshot, SettingsError> {
+        self.request(|reply| SettingsCommand::OpenWindowsPermissionSettings { reply })
+            .await
+    }
+    #[cfg(target_os = "windows")]
+    pub async fn repair_windows_plugin_runtime(&self) -> Result<SettingsSnapshot, SettingsError> {
+        self.request(|reply| SettingsCommand::RepairWindowsPluginRuntime { reply })
+            .await
+    }
+    #[cfg(target_os = "windows")]
+    pub async fn request_windows_elevation(&self) -> Result<SettingsSnapshot, SettingsError> {
+        self.request(|reply| SettingsCommand::RequestWindowsElevation { reply })
+            .await
+    }
+    #[cfg(target_os = "windows")]
+    pub async fn set_request_elevation_on_startup(
+        &self,
+        expected_config_revision: u64,
+        enabled: bool,
+    ) -> Result<SettingsSnapshot, SettingsError> {
+        self.request(|reply| SettingsCommand::SetRequestElevationOnStartup {
+            expected_config_revision,
+            enabled,
+            reply,
+        })
+        .await
+    }
+
     pub async fn set_startup_item_enabled(
         &self,
         enabled: bool,

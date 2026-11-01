@@ -16,6 +16,10 @@ use super::*;
 #[cfg_attr(any(test, feature = "schema-generation"), derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct OverlayConfig {
+    /// The user's explicit visibility preference, independent of temporary
+    /// hover/idle hiding or another application's window covering the pet.
+    #[serde(default = "default_visible")]
+    pub visible: bool,
     /// Windows ordinary capture window; other platforms retain overlay behavior.
     #[serde(default)]
     pub window_mode: bool,
@@ -133,6 +137,10 @@ pub struct OverlayConfig {
     /// the drag has stopped. This replaces the earlier work-area constraint,
     /// which forbade the desktop chrome strip entirely.
     pub keep_inside_screen: bool,
+}
+
+pub(super) fn default_visible() -> bool {
+    true
 }
 
 pub const fn default_window_background_color() -> [u8; 3] {

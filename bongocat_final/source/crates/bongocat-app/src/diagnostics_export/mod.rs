@@ -471,6 +471,7 @@ mod tests {
             language: SettingsLanguage::System,
             resolved_language: SettingsLanguage::English,
             status_icon_visible: true,
+            request_elevation_on_startup: false,
             taskbar_icon_visible: true,
             dock_icon_visible: false,
             check_for_updates_automatically: false,

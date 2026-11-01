@@ -4,6 +4,7 @@
 
 ### ✨ Features
 
+- Reduce Windows key-overlay texture allocations and companion-panel memory, keep background work running without competing for foreground window order, and offer optional UAC restart instead of repeated administrator prompts. Provide a per-user installer with a selectable location, bundled companions and offline dependencies.
 - Added nested companion-plugin menus, pet model/visibility messages and anonymous input-activity support for the Cyber Work counter.
 
 ### 🐛 Bug Fixes

@@ -31,6 +31,7 @@ pub struct SettingsSnapshot {
     pub language: SettingsLanguage,
     pub resolved_language: SettingsLanguage,
     pub status_icon_visible: bool,
+    pub request_elevation_on_startup: bool,
     pub taskbar_icon_visible: bool,
     /// The macOS Dock icon, projected from `system.show_dock_icon`. It travels
     /// beside `taskbar_icon_visible` rather than inside it because the two

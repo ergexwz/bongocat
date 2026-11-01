@@ -333,7 +333,9 @@
       "dock_icon_update_failed": "Không thể cập nhật biểu tượng Dock.",
       "window_hide_failed": "Không thể ẩn cửa sổ cài đặt",
       "window_layout_save_failed": "Không thể lưu bố cục cửa sổ",
-      "application_shutdown_failed": "BongoCat không thể đóng hoàn toàn"
+      "application_shutdown_failed": "BongoCat không thể đóng hoàn toàn",
+      "elevation_failed": "The same-account elevation handoff failed. Continue with ordinary permissions.",
+      "plugin_dependency_failed": "Restart with ordinary permissions and retry. If it still fails, reinstall using the complete installer with its offline runtime."
     }
   },
   "settings": {
@@ -562,6 +564,15 @@
         "unsupported_platform": "Tính năng tự động khởi động không khả dụng trên hệ thống này",
         "unsupported_os": "Tính năng tự động khởi động không khả dụng trên hệ điều hành này",
         "unsupported_build": "Tính năng tự động khởi động không khả dụng trong bản dựng phát triển"
+      },
+      "elevation": {
+        "once": "Restart with administrator permissions once",
+        "request": "Request elevation",
+        "every_start": "Request UAC elevation on future starts",
+        "description": "Ordinary permissions are the default. Cancelling UAC keeps the app running. Same account only; elevation does not establish anti-cheat compatibility.",
+        "legacy": "Inspect legacy administrator compatibility settings",
+        "runtime": "Install or repair the plugin WebView2 runtime",
+        "open": "Open"
       }
     }
   },

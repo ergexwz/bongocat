@@ -77,6 +77,8 @@
 #[cfg(target_os = "macos")]
 mod finder_store;
 
+mod windows_dependencies;
+
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -429,6 +431,9 @@ enum Invocation {
 
 /// Options for one packaging run.
 struct Options {
+    bundle_local_plugins: bool,
+    build_only: bool,
+    storage_test_injection: bool,
     target: Option<ReleaseTarget>,
     environment: String,
     formats: Option<Vec<PackageFormat>>,
@@ -441,6 +446,9 @@ usage: cargo run -p bongocat-packaging -- [options]
 Builds the Production product and packages the host platform release artifacts.
 
 options:
+  --bundle-local-plugins   pin locally built Windows companion packages into this build
+  --build-only             compile the executable without bundling or signing
+  --storage-test-injection  allow isolated smoke roots (development build-only)
   --target <triple>        one of aarch64-apple-darwin,
                             x86_64-apple-darwin, x86_64-pc-windows-msvc;
                             defaults to the host target
@@ -472,6 +480,9 @@ environment:
                            and the passphrase used to unlock it when signing";
 
     fn parse(arguments: Vec<String>) -> Result<Self> {
+        let mut bundle_local_plugins = false;
+        let mut build_only = false;
+        let mut storage_test_injection = false;
         let mut target = None;
         let mut environment = None;
         let mut formats = None;
@@ -484,6 +495,9 @@ environment:
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
+                "--bundle-local-plugins" => bundle_local_plugins = true,
+                "--build-only" => build_only = true,
+                "--storage-test-injection" => storage_test_injection = true,
                 "--target" => {
                     let triple = next_value(&mut arguments, "--target")?;
                     target = Some(ReleaseTarget::parse(&triple)?);
@@ -543,7 +557,12 @@ environment:
         // Neither alternative mode builds anything, so an option that only affects a
         // build is a mistake rather than a no-op, and the two alternatives are mutually
         // exclusive.
-        let build_option = target.is_some() || environment.is_some() || formats.is_some();
+        let build_option = target.is_some()
+            || environment.is_some()
+            || formats.is_some()
+            || bundle_local_plugins
+            || build_only
+            || storage_test_injection;
         if let Some(file) = key_output {
             if build_option || merge_directory.is_some() || release_notes.is_some() {
                 return failure(
@@ -574,6 +593,9 @@ environment:
 
         let Some(directory) = merge_directory else {
             return Ok(Self::Package(Options {
+                bundle_local_plugins,
+                build_only,
+                storage_test_injection,
                 target,
                 environment: environment.unwrap_or_else(|| "production".to_owned()),
                 formats,
@@ -655,6 +677,40 @@ fn package(options: Options) -> Result<Vec<PathBuf>> {
         Some(target) => target,
         None => ReleaseTarget::host()?,
     };
+    if options.bundle_local_plugins
+        && (options.build_only || target != ReleaseTarget::WindowsX86_64)
+    {
+        return failure("--bundle-local-plugins requires a Windows installer build");
+    }
+    if options.storage_test_injection
+        && (!options.build_only || options.environment != "development")
+    {
+        return failure("--storage-test-injection requires --build-only --environment development");
+    }
+    if options.build_only {
+        build_application(
+            &workspace,
+            target,
+            &options.environment,
+            options.storage_test_injection,
+            None,
+        )?;
+        let directory = if ReleaseTarget::host()? == target {
+            workspace.join("target/release")
+        } else {
+            workspace
+                .join("target")
+                .join(target.triple())
+                .join("release")
+        };
+        return Ok(vec![directory.join(
+            if target == ReleaseTarget::WindowsX86_64 {
+                format!("{APPLICATION_BINARY}.exe")
+            } else {
+                APPLICATION_BINARY.to_owned()
+            },
+        )]);
+    }
     let requested = match &options.formats {
         Some(formats) => {
             for format in formats {
@@ -683,7 +739,18 @@ fn package(options: Options) -> Result<Vec<PathBuf>> {
             .join(",")
     );
 
-    build_application(&workspace, target, &options.environment)?;
+    let bundled_pin = if target == ReleaseTarget::WindowsX86_64 {
+        windows_dependencies::verify(&workspace, options.bundle_local_plugins)?
+    } else {
+        None
+    };
+    build_application(
+        &workspace,
+        target,
+        &options.environment,
+        false,
+        bundled_pin.as_deref(),
+    )?;
     let provenance = write_provenance(
         &workspace,
         target,
@@ -705,6 +772,7 @@ fn package(options: Options) -> Result<Vec<PathBuf>> {
         &models,
         swift_bundle.as_deref(),
         &packager_formats(&requested),
+        bundled_pin.as_deref(),
     )?;
     let packages = cargo_packager::package(&config)?;
     // The packager has copied from the staging area by now, and nothing after
@@ -789,19 +857,34 @@ fn environment_features(environment: &str) -> &'static str {
 ///
 /// The environment is expressed to Cargo as a feature instead of an environment
 /// variable, so Cargo owns feature parsing and build-script rerun semantics.
-fn build_application(workspace: &Path, target: ReleaseTarget, environment: &str) -> Result<()> {
+fn build_application(
+    workspace: &Path,
+    target: ReleaseTarget,
+    environment: &str,
+    storage_test_injection: bool,
+    bundled_catalog_sha256: Option<&str>,
+) -> Result<()> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(&cargo);
+    command.env(
+        "BONGOCAT_BUNDLED_CATALOG_SHA256",
+        bundled_catalog_sha256.unwrap_or(""),
+    );
     command.current_dir(workspace).args([
         "build",
         "--locked",
         "--release",
-        "--target",
-        target.triple(),
         "-p",
         APPLICATION_BINARY,
     ]);
-    let features = environment_features(environment);
+    if ReleaseTarget::host()? != target {
+        command.args(["--target", target.triple()]);
+    }
+    let features = if storage_test_injection {
+        "storage-test-injection"
+    } else {
+        environment_features(environment)
+    };
     if features != "default" {
         command.args(["--features", features]);
     }
@@ -879,6 +962,7 @@ fn packaging_config(
     models: &Path,
     swift_bundle: Option<&Path>,
     formats: &[PackageFormat],
+    bundled_catalog_sha256: Option<&str>,
 ) -> Result<Config> {
     let mut config = Config::default();
     config.product_name = PRODUCT_NAME.to_owned();
@@ -906,16 +990,25 @@ fn packaging_config(
             .to_string(),
     ]);
     config.binaries = vec![Binary::new(APPLICATION_BINARY).main(true)];
-    config.binaries_dir = Some(
+    config.binaries_dir = Some(if ReleaseTarget::host()? == target {
+        workspace.join("target/release")
+    } else {
         workspace
             .join("target")
             .join(target.triple())
-            .join("release"),
-    );
+            .join("release")
+    });
     config.out_dir = workspace.join(OUTPUT_DIRECTORY);
     config.target_triple = Some(target.triple().to_owned());
     config.formats = Some(formats.to_vec());
-    config.resources = Some(resources(target, models, provenance, swift_bundle));
+    let mut bundled_resources = resources(target, models, provenance, swift_bundle);
+    if target == ReleaseTarget::WindowsX86_64 {
+        bundled_resources.extend(windows_dependencies::resources(
+            workspace,
+            bundled_catalog_sha256,
+        )?);
+    }
+    config.resources = Some(bundled_resources);
 
     if target.is_apple() {
         let mut macos = MacOsConfig::new();
@@ -948,6 +1041,10 @@ fn windows_installer(workspace: &Path) -> NsisConfig {
         .display_language_selector(true);
     // Per-user install: no administrator prompt, no machine-level registry keys.
     nsis.install_mode = NSISInstallerMode::CurrentUser;
+    nsis.preinstall_section = Some(windows_dependencies::installer_sections(workspace));
+    nsis.appdata_paths = Some(vec![
+        "$APPDATA/com.ayangweb.bongo-cat/production".to_owned(),
+    ]);
     nsis
 }
 
@@ -2457,6 +2554,29 @@ mod tests {
         INSTALLER_LANGUAGES, MODEL_DIRECTORY, OUTPUT_DIRECTORY, PRESET_MODELS, PRODUCT_NAME,
         ReleaseTarget, is_packaging_junk,
     };
+
+    #[test]
+    fn local_companion_trust_requires_an_explicit_packaging_option() {
+        let super::Invocation::Package(default) = super::Invocation::parse(Vec::new()).unwrap()
+        else {
+            panic!("package")
+        };
+        assert!(!default.bundle_local_plugins);
+        let super::Invocation::Package(local) =
+            super::Invocation::parse(vec!["--bundle-local-plugins".into()]).unwrap()
+        else {
+            panic!("package")
+        };
+        assert!(local.bundle_local_plugins);
+        assert!(
+            super::Invocation::parse(vec![
+                "--bundle-local-plugins".into(),
+                "--generate-signing-key".into(),
+                "unused.key".into()
+            ])
+            .is_err()
+        );
+    }
 
     /// The wizard has to offer the picker, keep English first as the fallback, and carry
     /// translated installer messages for the one language `cargo-packager` embeds none for.

@@ -4,6 +4,8 @@ mod todo;
 
 use bongocat_companion::{UiBridge, data_dir, ensure_data_dir, run_host};
 use std::sync::Arc;
+use tauri::Listener;
+use tauri_plugin_notification::NotificationExt;
 
 fn main() {
     let directory = data_dir("com.bongocat.todo");
@@ -16,6 +18,7 @@ fn main() {
         todo: Arc::clone(&state),
     };
 
+    let window_presence = ui.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(app_state)
@@ -35,6 +38,19 @@ fn main() {
             todo::get_locale,
         ])
         .setup(move |app| {
+            let notifications = app.handle().clone();
+            app.listen(bongocat_companion::EVENT_NAME, move |event| {
+                if let Ok(bongocat_companion::UiEvent::Notify { title, body }) =
+                    serde_json::from_str(event.payload())
+                {
+                    let _ = notifications
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(body)
+                        .show();
+                }
+            });
             let stop_pending = ui.attach(app.handle().clone());
             if stop_pending {
                 app.handle().exit(0);
@@ -53,6 +69,19 @@ fn main() {
                 })?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("bongocat todo plugin");
+        .on_window_event(move |window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window_presence.set_window_open(window.label(), false);
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("bongocat todo plugin")
+        .run(|_, event| {
+            if let tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
 }

@@ -91,6 +91,7 @@ pub(crate) struct Renderer {
     pub(crate) context: ID3D11DeviceContext,
     pub(crate) device: ID3D11Device,
     pub(crate) model_generation: u64,
+    occluded: std::cell::Cell<bool>,
     pub(crate) resources: Arc<RenderResources>,
     pub(crate) model: GpuModel,
     pub(crate) width: u32,
@@ -214,6 +215,7 @@ impl Renderer {
             context,
             device,
             model_generation: frame.model_generation,
+            occluded: std::cell::Cell::new(false),
             resources: Arc::clone(&frame.resources),
             model,
             width: window.width,
@@ -422,6 +424,19 @@ impl Renderer {
         verify: bool,
         capture: bool,
     ) -> WindowsResult<Option<CapturedFrame>> {
+        if !capture && self.occluded.get() {
+            // SAFETY: the swap chain belongs to this renderer and thread. TEST
+            // probes visibility without submitting another frame or drawing masks.
+            let status = unsafe {
+                self.swap_chain
+                    .Present(0, windows::Win32::Graphics::Dxgi::DXGI_PRESENT_TEST)
+            };
+            if status == DXGI_STATUS_OCCLUDED {
+                return Err(Error::new(status, "DXGI swap chain is occluded"));
+            }
+            status.ok()?;
+            self.occluded.set(false);
+        }
         let viewport = D3D11_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,
@@ -726,6 +741,7 @@ impl Renderer {
         unsafe {
             let present = self.swap_chain.Present(1, DXGI_PRESENT(0));
             if present == DXGI_STATUS_OCCLUDED {
+                self.occluded.set(true);
                 return Err(Error::new(
                     DXGI_STATUS_OCCLUDED,
                     "DXGI swap chain is occluded",

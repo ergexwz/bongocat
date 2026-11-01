@@ -22,6 +22,9 @@ tempfile.workspace = true
 thiserror.workspace = true
 zip.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+bongocat-platform.workspace = true
+
 [dev-dependencies]
 cargo-packager.workspace = true
 

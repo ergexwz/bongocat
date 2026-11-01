@@ -129,13 +129,11 @@ export async function showAt(kind: PanelKind, cssHeight?: number, uiScale = 1) {
     })
   }
   await window.show()
-  if (!isBubble) {
-    await window.setFocus()
-  }
+
 }
 
 export async function hideCurrent() {
-  await getCurrentWindow().hide()
+  await getCurrentWindow().destroy()
 }
 
 export async function currentVisible() {

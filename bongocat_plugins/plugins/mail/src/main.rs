@@ -17,6 +17,7 @@ fn main() {
 
     let app_state = AppState { store, mail };
 
+    let window_presence = ui.clone();
     tauri::Builder::default()
         .manage(app_state)
         .manage(mail::manager::ConnectionManager::new())
@@ -39,10 +40,12 @@ fn main() {
             mail::mail_open_url,
             mail::mail_password_exists,
             mail::take_pending_open,
+            mail::take_pending_mail_bubbles,
             mail::get_pet_bounds,
             mail::get_locale,
         ])
         .setup(move |app| {
+            mail::start_background(app.handle());
             let stop_pending = ui.attach(app.handle().clone());
             if stop_pending {
                 app.handle().exit(0);
@@ -61,6 +64,19 @@ fn main() {
                 })?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("bongocat mail plugin");
+        .on_window_event(move |window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window_presence.set_window_open(window.label(), false);
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("bongocat mail plugin")
+        .run(|_, event| {
+            if let tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
 }

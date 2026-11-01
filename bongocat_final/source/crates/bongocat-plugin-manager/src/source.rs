@@ -21,6 +21,10 @@ pub enum PluginSource {
         repository: String,
         public_key: String,
         platform: String,
+        bundled_directory: Option<PathBuf>,
+        /// Exact catalog digest compiled into a local companion build. Online
+        /// catalogs still require the release signature.
+        bundled_catalog_sha256: Option<String>,
     },
 }
 
@@ -42,6 +46,13 @@ enum PackageLocation {
 }
 
 impl AvailablePlugin {
+    /// Local package path after catalog/path verification, for installer staging.
+    pub fn local_package_path(&self) -> Option<&Path> {
+        match &self.location {
+            PackageLocation::Local(path) => Some(path),
+            PackageLocation::Https(_) => None,
+        }
+    }
     /// Replace a remote catalog icon with a persistent local copy.
     ///
     /// Development catalogs already point at a package-local file, so they are
@@ -86,6 +97,64 @@ impl AvailablePlugin {
 }
 
 impl PluginSource {
+    /// Seed verified bundled packages exactly once without enabling them or
+    /// reinstalling something the user subsequently uninstalled.
+    pub fn install_bundled(
+        &self,
+        manager: &mut crate::PluginManager,
+        app: &str,
+        stop: &AtomicBool,
+    ) -> Result<(), String> {
+        let Self::Production {
+            bundled_directory: Some(directory),
+            bundled_catalog_sha256,
+            public_key,
+            platform,
+            ..
+        } = self
+        else {
+            return Ok(());
+        };
+        if !directory.exists() {
+            return Ok(());
+        }
+        let offers = verified_bundled_plugins_with_pin(
+            directory,
+            public_key,
+            platform,
+            app,
+            bundled_catalog_sha256.as_deref(),
+        )?;
+        let marker = manager.plugin_dir().join("bundled-installed.json");
+        let mut seen: Vec<String> = match install::read_bounded(&marker, 16 * 1024) {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|_| "invalid bundled installation record")?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        if seen.len() > 32 {
+            return Err("invalid bundled installation record".into());
+        }
+        for offer in offers {
+            if seen.contains(&offer.metadata.id) {
+                continue;
+            }
+            if manager.installed_version(&offer.metadata.id).is_none() {
+                let bytes = offer.read(stop)?;
+                manager
+                    .install_verified(&bytes, &offer.digest)
+                    .map_err(|e| e.to_string())?;
+            }
+            seen.push(offer.metadata.id);
+            let mut file =
+                atomic_write_file::AtomicWriteFile::open(&marker).map_err(|e| e.to_string())?;
+            serde_json::to_writer(&mut file, &seen).map_err(|e| e.to_string())?;
+            file.commit().map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     pub fn discover(&self, app: &str, stop: &AtomicBool) -> Result<Vec<AvailablePlugin>, String> {
         let mut candidates = Vec::new();
         match self {
@@ -133,6 +202,7 @@ impl PluginSource {
                 repository,
                 public_key,
                 platform,
+                ..
             } => {
                 let catalog = catalog::fetch_catalog_blocking(owner, repository, public_key, stop)
                     .map_err(|error| error.to_string())?;
@@ -165,6 +235,81 @@ impl PluginSource {
         }
         select_candidates(candidates, app)
     }
+}
+
+/// Used by both the installer preflight and the runtime: a local ZIP is trusted
+/// only through its digest in the release-key-signed catalog.
+pub fn verified_bundled_plugins(
+    directory: &Path,
+    public_key: &str,
+    platform: &str,
+    app: &str,
+) -> Result<Vec<AvailablePlugin>, String> {
+    verified_bundled_plugins_with_pin(directory, public_key, platform, app, None)
+}
+
+/// The pin must come from the application build, never an adjacent file or a
+/// runtime environment variable. This does not change online catalog trust.
+pub fn verified_bundled_plugins_with_pin(
+    directory: &Path,
+    public_key: &str,
+    platform: &str,
+    app: &str,
+    compiled_catalog_sha256: Option<&str>,
+) -> Result<Vec<AvailablePlugin>, String> {
+    let directory = directory.canonicalize().map_err(|e| e.to_string())?;
+    let bytes = install::read_bounded(
+        &directory.join(catalog::CATALOG_NAME),
+        catalog::MAX_CATALOG_BYTES,
+    )
+    .map_err(|e| e.to_string())?;
+    let signed = if let Some(pin) = compiled_catalog_sha256 {
+        if pin.len() != 64
+            || !pin.bytes().all(|c| c.is_ascii_hexdigit())
+            || !catalog::sha256_of(&bytes).eq_ignore_ascii_case(pin)
+        {
+            return Err("bundled catalog differs from this application build".into());
+        }
+        serde_json::from_slice::<Catalog>(&bytes).map_err(|e| e.to_string())?
+    } else {
+        catalog::parse_catalog(&bytes, public_key).map_err(|e| e.to_string())?
+    };
+    let mut offers = Vec::new();
+    for entry in signed.plugins {
+        let Some(download) = entry.downloads.get(platform) else {
+            continue;
+        };
+        let name = download
+            .rsplit('/')
+            .next()
+            .ok_or("invalid bundled package name")?;
+        if !name.ends_with(".zip")
+            || name.len() > 255
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        {
+            return Err("invalid bundled package name".into());
+        }
+        let package = directory
+            .join(name)
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
+        if package.parent() != Some(directory.as_path()) {
+            return Err("bundled package escapes its directory".into());
+        }
+        let digest = entry
+            .sha256
+            .clone()
+            .filter(|s| s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit()))
+            .ok_or("signed catalog lacks a package digest")?;
+        let mut offer = from_catalog(&entry, String::new(), digest.to_ascii_lowercase());
+        offer.location = PackageLocation::Local(package);
+        // Preflight integrity and package identity now, before any installation.
+        offer.read(&AtomicBool::new(false))?;
+        offers.push(offer);
+    }
+    select_candidates(offers, app)
 }
 
 fn select_candidates(
@@ -251,7 +396,137 @@ mod tests {
         archive
             .write_all(&serde_json::to_vec(&manifest).unwrap())
             .unwrap();
+        let entry = crate::loader::entry_path(Path::new(""), "plugin")
+            .to_string_lossy()
+            .into_owned();
+        archive
+            .start_file(entry, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"fixture: never executed").unwrap();
         archive.finish().unwrap().into_inner()
+    }
+
+    fn signed_bundle(directory: &Path, download: &str) -> String {
+        let bytes = package("org.test.bundled", "1.0.0", ">=2");
+        fs::write(directory.join("plugin.zip"), &bytes).unwrap();
+        let metadata = install::inspect_package(&bytes).unwrap().metadata;
+        let catalog = Catalog {
+            plugins: vec![CatalogEntry {
+                id: metadata.id,
+                name: metadata.name,
+                description: metadata.description,
+                localizations: metadata.localizations,
+                version: metadata.version,
+                app_versions: metadata.app_versions,
+                protocol_version: metadata.protocol_version,
+                icon: metadata.icon,
+                icon_url: "https://example.com/icon.png".into(),
+                downloads: [("windows-x86_64".into(), download.into())].into(),
+                sha256: Some(catalog::sha256_of(&bytes)),
+                homepage: None,
+            }],
+        };
+        // Disposable fixture keys; never the application release key.
+        let keys = cargo_packager::sign::generate_key(Some(String::new())).unwrap();
+        let path = directory.join("unsigned-catalog.json");
+        fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+        let signature = cargo_packager::sign::sign_file(
+            &cargo_packager::sign::SigningConfig::new()
+                .private_key(keys.sk)
+                .password(""),
+            &path,
+        )
+        .unwrap();
+        let signature = fs::read_to_string(signature).unwrap();
+        fs::write(
+            directory.join(catalog::CATALOG_NAME),
+            serde_json::to_vec(&serde_json::json!({"catalog": catalog, "signature": signature}))
+                .unwrap(),
+        )
+        .unwrap();
+        keys.pk
+    }
+
+    #[test]
+    fn bundled_packages_require_the_catalog_key_digest_and_safe_local_filename() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = signed_bundle(directory.path(), "https://example.com/plugin.zip");
+        let verify =
+            |key: &str| verified_bundled_plugins(directory.path(), key, "windows-x86_64", "2.5.0");
+        assert_eq!(verify(&key).unwrap().len(), 1);
+        let other = cargo_packager::sign::generate_key(Some(String::new())).unwrap();
+        assert!(verify(&other.pk).is_err());
+        fs::write(directory.path().join("plugin.zip"), b"tampered").unwrap();
+        assert!(verify(&key).is_err());
+        let key = signed_bundle(directory.path(), "../outside.zip");
+        assert!(verify(&key).is_err());
+        let key = signed_bundle(directory.path(), "../plugin.zip:stream");
+        assert!(verify(&key).is_err());
+    }
+
+    #[test]
+    fn bundled_installation_is_disabled_once_and_respects_user_removal() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = signed_bundle(directory.path(), "plugin.zip");
+        let source = PluginSource::Production {
+            owner: "unused".into(),
+            repository: "unused".into(),
+            public_key: key,
+            platform: "windows-x86_64".into(),
+            bundled_directory: Some(directory.path().to_path_buf()),
+            bundled_catalog_sha256: None,
+        };
+        let storage = tempfile::tempdir().unwrap();
+        let mut manager = crate::PluginManager::new(storage.path().to_path_buf()).unwrap();
+        let stop = AtomicBool::new(false);
+        source
+            .install_bundled(&mut manager, "2.5.0", &stop)
+            .unwrap();
+        assert_eq!(manager.list_plugins().len(), 1);
+        assert_eq!(manager.list_plugins()[0].1, crate::PluginState::Discovered);
+        let data = manager.data_root("org.test.bundled", true).unwrap();
+        fs::write(data.join("business.json"), b"saved business data").unwrap();
+        source
+            .install_bundled(&mut manager, "2.5.0", &stop)
+            .unwrap();
+        assert_eq!(
+            fs::read(data.join("business.json")).unwrap(),
+            b"saved business data"
+        );
+        manager.uninstall("org.test.bundled").unwrap();
+        source
+            .install_bundled(&mut manager, "2.5.0", &stop)
+            .unwrap();
+        assert!(manager.installed_version("org.test.bundled").is_none());
+    }
+
+    #[test]
+    fn local_bundle_requires_the_compiled_pin_and_rejects_modified_catalog_or_zip() {
+        let directory = tempfile::tempdir().unwrap();
+        signed_bundle(directory.path(), "plugin.zip");
+        let path = directory.path().join(catalog::CATALOG_NAME);
+        let signed: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let bytes = serde_json::to_vec(&signed["catalog"]).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let pin = catalog::sha256_of(&bytes);
+        assert!(verified_bundled_plugins(directory.path(), "", "windows-x86_64", "2.5.0").is_err());
+        let verify = || {
+            verified_bundled_plugins_with_pin(
+                directory.path(),
+                "",
+                "windows-x86_64",
+                "2.5.0",
+                Some(&pin),
+            )
+        };
+        assert_eq!(verify().unwrap().len(), 1);
+        let mut changed = bytes.clone();
+        changed.push(b' ');
+        fs::write(&path, changed).unwrap();
+        assert!(verify().is_err());
+        fs::write(&path, bytes).unwrap();
+        fs::write(directory.path().join("plugin.zip"), b"replaced executable").unwrap();
+        assert!(verify().is_err());
     }
     #[test]
     fn discovers_latest_per_id_without_installing_or_executing() {

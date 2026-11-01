@@ -32,11 +32,11 @@ fn application_loads_config_updates_runtime_and_stops() {
         .set_overlay_visible(false)
         .expect("update overlay visibility");
     assert!(!snapshot.overlay_visible);
+    assert!(!application.config().overlay.visible);
     assert!(
         std::fs::read_to_string(&config_path)
             .expect("persisted config")
-            .find("\"visible\"")
-            .is_none()
+            .contains("\"visible\": false")
     );
 
     let overlay_settings = OverlaySettings {
@@ -116,7 +116,7 @@ fn application_loads_config_updates_runtime_and_stops() {
     );
     assert_eq!(restarted.runtime_client().snapshot().maximum_fps, 120);
     assert_eq!(restarted.config().appearance.theme, ConfigTheme::Dark);
-    assert!(restarted.runtime_client().snapshot().overlay_visible);
+    assert!(!restarted.runtime_client().snapshot().overlay_visible);
     restarted.shutdown().expect("clean restart shutdown");
 }
 
@@ -185,28 +185,33 @@ fn a_runtime_motion_audio_opt_in_prepares_the_active_model_without_restarting() 
     application.shutdown().expect("clean shutdown");
 }
 
-/// Overlay visibility is runtime-only: every fresh process starts visible,
-/// and a session hide never adds a preference to `config.json`.
+/// An explicit hide survives restart; showing it again persists the new choice.
 #[test]
-fn startup_starts_the_overlay_visible_without_persisting_visibility() {
+fn startup_restores_the_saved_overlay_visibility() {
     let base = tempdir().expect("temp directory");
     let layout = StorageLayout::under(base.path(), BUILD_ENVIRONMENT);
     let mut application =
         Application::start_with_layout(layout.clone()).expect("start application");
     assert!(application.runtime_client().snapshot().overlay_visible);
     let persisted = std::fs::read_to_string(&layout.config).expect("persisted config");
-    assert!(!persisted.contains("\"visible\""));
+    assert!(persisted.contains("\"visible\": true"));
     application
         .set_overlay_visible(false)
-        .expect("hide overlay for this session");
+        .expect("hide overlay");
     assert!(!application.runtime_client().snapshot().overlay_visible);
     let persisted = std::fs::read_to_string(&layout.config).expect("persisted config");
-    assert!(!persisted.contains("\"visible\""));
+    assert!(persisted.contains("\"visible\": false"));
     application.shutdown().expect("clean shutdown");
 
-    let restarted = Application::start_with_layout(layout).expect("restart application");
-    assert!(restarted.runtime_client().snapshot().overlay_visible);
+    let mut restarted =
+        Application::start_with_layout(layout.clone()).expect("restart application");
+    assert!(!restarted.runtime_client().snapshot().overlay_visible);
+    restarted.set_overlay_visible(true).expect("show overlay");
     restarted.shutdown().expect("clean restart shutdown");
+
+    let shown = Application::start_with_layout(layout).expect("restart shown application");
+    assert!(shown.runtime_client().snapshot().overlay_visible);
+    shown.shutdown().expect("clean shown shutdown");
 }
 
 #[test]

@@ -235,6 +235,7 @@ pub(super) fn snapshot(
         language: settings_language(application.config().appearance.language),
         resolved_language: settings_language(application.effective_language()),
         status_icon_visible: application.config().system.show_status_icon,
+        request_elevation_on_startup: application.config().system.request_elevation_on_startup,
         taskbar_icon_visible: application.config().system.show_taskbar_icon,
         dock_icon_visible: application.config().system.show_dock_icon,
         check_for_updates_automatically: application.config().updates.check_automatically,

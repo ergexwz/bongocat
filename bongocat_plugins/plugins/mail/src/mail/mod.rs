@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
 use manager::{
     ConnectionManager, ConnectionStatus, ConnectionStatusPayload, LastSeenUidPayload,
@@ -344,6 +344,7 @@ pub struct MailState {
     locale: String,
     pet_bounds: Option<PetBounds>,
     pending_open: Vec<String>,
+    pending_bubbles: Vec<NewMailPayload>,
     last_retention: i64,
 }
 
@@ -355,6 +356,7 @@ impl MailState {
             locale: "en-US".into(),
             pet_bounds: None,
             pending_open: Vec::new(),
+            pending_bubbles: Vec::new(),
             last_retention: 0,
         }))
     }
@@ -509,6 +511,76 @@ impl CompanionState for MailState {
 pub struct AppState {
     pub store: Arc<Mutex<MailStore>>,
     pub mail: Arc<Mutex<MailState>>,
+}
+
+/// IMAP persistence must run even when no WebView has ever been opened.
+pub fn start_background(app: &AppHandle) {
+    let handle = app.clone();
+    app.listen("mail://new-mail", move |event| {
+        let Ok(payload) = serde_json::from_str::<NewMailPayload>(event.payload()) else {
+            return;
+        };
+        if !mail_record_new(handle.clone(), handle.state(), payload.clone()) {
+            return;
+        }
+        let state = handle.state::<AppState>();
+        let enabled = state
+            .store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .settings
+            .bubble_enabled;
+        if enabled {
+            let mut mail = state
+                .mail
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if mail.pending_bubbles.len() >= 32 {
+                mail.pending_bubbles.remove(0);
+            }
+            mail.pending_bubbles.push(payload);
+            drop(mail);
+            let app = handle.clone();
+            let ui = state
+                .mail
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .ui
+                .clone();
+            let _ = ui.dispatch_window(move |_handle| {
+                if bongocat_companion::ensure_window(&app, "bubble").is_ok() {
+                    let _ = app.emit("mail://show-bubble", ());
+                }
+            });
+        }
+    });
+    let handle = app.clone();
+    app.listen("mail://connection-status", move |event| {
+        if let Ok(payload) = serde_json::from_str(event.payload()) {
+            mail_record_status(handle.clone(), handle.state(), payload);
+        }
+    });
+    let handle = app.clone();
+    app.listen("mail://last-seen-uid", move |event| {
+        if let Ok(payload) = serde_json::from_str(event.payload()) {
+            mail_record_last_seen(handle.clone(), handle.state(), payload);
+        }
+    });
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = mail_reconnect_all(handle.clone(), handle.state(), handle.state()).await;
+    });
+}
+
+#[tauri::command]
+pub fn take_pending_mail_bubbles(state: State<'_, AppState>) -> Vec<NewMailPayload> {
+    std::mem::take(
+        &mut state
+            .mail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending_bubbles,
+    )
 }
 
 fn keyring_key(account_id: &str) -> String {

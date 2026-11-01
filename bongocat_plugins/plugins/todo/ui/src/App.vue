@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -164,18 +163,6 @@ async function bubbleClose() {
   }
 }
 
-async function sendDesktopNotification(title: string, body: string) {
-  try {
-    if (!(await isPermissionGranted())) {
-      const permission = await requestPermission()
-      if (permission !== 'granted') return
-    }
-    sendNotification({ title, body })
-  } catch {
-    // The bubble remains the fallback when the OS notification path is unavailable.
-  }
-}
-
 onMounted(async () => {
   const initialLocale = await invoke<string>('get_locale')
   locale.value = initialLocale
@@ -195,10 +182,10 @@ onMounted(async () => {
         locale.value = payload.locale
         break
       case 'bubble':
-        if (view === 'bubble') addBubble(payload.bubble)
-        break
-      case 'notify':
-        if (view === 'runtime') void sendDesktopNotification(payload.title, payload.body)
+        if (view === 'bubble') {
+          const pending = await invoke<Array<any>>('take_pending_bubbles')
+          for (const bubble of pending) addBubble(bubble)
+        }
         break
       default:
         break

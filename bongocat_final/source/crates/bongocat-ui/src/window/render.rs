@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_os = "windows")]
+use gpui_kit::component::Sizable;
 use gpui_kit::{FileDropEvent, canvas};
 
 fn with_search_keywords<I>(items: I, keywords: &[SharedString]) -> impl Iterator<Item = SettingItem>
@@ -1373,6 +1375,52 @@ impl Render for SettingsView {
                         open_at_login = open_at_login.description(description);
                     }
                     items.push(open_at_login);
+                    #[cfg(target_os = "windows")]
+                    {
+                        let locale = language.catalog_locale();
+                        let elevation_view = view_entity.clone();
+                        items.push(SettingItem::new(
+                            bongocat_i18n::text(locale, "settings.app_system.elevation.once"),
+                            SettingField::element(move |options: &RenderOptions, _: &mut Window, app: &mut App| {
+                                let view = elevation_view.clone();
+                                let disabled = view.read(app).pending.is_some();
+                                Button::new("request-windows-elevation")
+                                    .label(bongocat_i18n::text(locale, "settings.app_system.elevation.request"))
+                                    .with_size(options.size()).disabled(disabled)
+                                    .on_click(move |_, _, app| { view.update(app, |view, cx| {
+                                        view.start_request(PendingOperation::WindowsElevation, Some(SettingValue::RequestWindowsElevation), cx);
+                                    }); })
+                            }),
+                        ).description(bongocat_i18n::text(locale, "settings.app_system.elevation.description")));
+                        for (label, id, action) in [
+                            ("settings.app_system.elevation.legacy", "legacy-windows-permissions", SettingValue::OpenWindowsPermissionSettings),
+                            ("settings.app_system.elevation.runtime", "repair-plugin-runtime", SettingValue::RepairWindowsPluginRuntime),
+                        ] {
+                            let maintenance_view = view_entity.clone();
+                            items.push(SettingItem::new(bongocat_i18n::text(locale, label), SettingField::element(
+                                move |options: &RenderOptions, _: &mut Window, app: &mut App| {
+                                    let view = maintenance_view.clone(); let action = action.clone();
+                                    Button::new(id).label(bongocat_i18n::text(locale, "settings.app_system.elevation.open"))
+                                        .with_size(options.size()).disabled(view.read(app).pending.is_some())
+                                        .on_click(move |_, _, app| { view.update(app, |view, cx| {
+                                            view.start_request(PendingOperation::WindowsElevation, Some(action.clone()), cx);
+                                        }); })
+                                }
+                            )));
+                        }
+                        let read_view = view_entity.clone();
+                        let write_view = view_entity.clone();
+                        items.push(SettingItem::new(
+                            bongocat_i18n::text(locale, "settings.app_system.elevation.every_start"),
+                            SettingField::switch(move |app| read_view.read(app).snapshot.as_ref().is_some_and(|s| s.request_elevation_on_startup), move |enabled, app| {
+                                write_view.update(app, |view, cx| {
+                                    if let Some(expected_config_revision) = view.snapshot.as_ref().and_then(|s| s.config_revision) {
+                                        view.start_request(PendingOperation::WindowsElevation, Some(SettingValue::RequestElevationOnStartup { expected_config_revision, enabled }), cx);
+                                    }
+                                });
+                            }),
+                        ));
+                    }
                     items.push(SettingItem::new(
                         bongocat_i18n::platform_text(
                             language.catalog_locale(),

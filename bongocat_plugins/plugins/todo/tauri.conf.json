@@ -9,18 +9,6 @@
   "app": {
     "windows": [
       {
-        "label": "runtime",
-        "title": "BongoCat Todo",
-        "url": "index.html?view=runtime",
-        "visible": false,
-        "width": 1,
-        "height": 1,
-        "decorations": false,
-        "transparent": true,
-        "skipTaskbar": true,
-        "resizable": false
-      },
-      {
         "label": "todo",
         "title": "Todo",
         "url": "index.html?view=todo",
@@ -32,7 +20,9 @@
         "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "resizable": false
+        "resizable": false,
+        "create": false,
+        "focus": false
       },
       {
         "label": "todo-mini",
@@ -46,7 +36,9 @@
         "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "resizable": false
+        "resizable": false,
+        "create": false,
+        "focus": false
       },
       {
         "label": "bubble",
@@ -60,11 +52,14 @@
         "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "resizable": false
+        "resizable": false,
+        "create": false,
+        "focus": false,
+        "focusable": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
     },
     "macOSPrivateApi": true
   },

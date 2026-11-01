@@ -239,7 +239,7 @@ impl Application {
                     (None, bongocat_audio::MotionAudioClient::unavailable())
                 }
             };
-        let runtime_overlay_visible = true;
+        let runtime_overlay_visible = config.overlay.visible;
         let runtime_motion_audio_enabled = config.model.play_motion_audio;
         let (runtime, render_consumer) = if enable_rendering {
             let (runtime, consumer) = RuntimeOwner::start_with_rendering_and_audio(

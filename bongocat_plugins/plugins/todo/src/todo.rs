@@ -366,6 +366,9 @@ impl CompanionState for TodoState {
                         body,
                     });
                     let bubble = self.due_bubble(&task);
+                    if self.pending_bubbles.len() >= 32 {
+                        self.pending_bubbles.remove(0);
+                    }
                     self.pending_bubbles.push(bubble.clone());
                     self.ui.emit(UiEvent::Bubble { bubble });
                 }

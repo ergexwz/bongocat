@@ -47,6 +47,51 @@ pub(super) fn run_service(
             break;
         };
         match command {
+            #[cfg(target_os = "windows")]
+            SettingsCommand::OpenWindowsPermissionSettings { reply } => {
+                let result = bongocat_platform::open_windows_permission_settings()
+                    .map_err(|_| SettingsError::new(SettingsErrorCode::ElevationFailed))
+                    .map(|()| snapshot(&application, &mut clock, false, startup_item.state()));
+                let _ = reply.respond(result);
+            }
+            #[cfg(target_os = "windows")]
+            SettingsCommand::RepairWindowsPluginRuntime { reply } => {
+                let result = bongocat_platform::repair_windows_plugin_runtime()
+                    .map_err(|_| SettingsError::new(SettingsErrorCode::PluginDependencyFailed))
+                    .map(|()| snapshot(&application, &mut clock, false, startup_item.state()));
+                let _ = reply.respond(result);
+            }
+            #[cfg(target_os = "windows")]
+            SettingsCommand::RequestWindowsElevation { reply } => {
+                let result = persist_window_state(&mut application, &window_state)
+                    .map_err(map_application_error)
+                    .and_then(|()| {
+                        bongocat_platform::request_elevation()
+                            .map_err(|_| SettingsError::new(SettingsErrorCode::ElevationFailed))
+                    })
+                    .map(|accepted| {
+                        if accepted && let Some(signals) = signals.as_ref() {
+                            signals.request_quit();
+                        }
+                        snapshot(&application, &mut clock, false, startup_item.state())
+                    });
+                let _ = reply.respond(result);
+            }
+            #[cfg(target_os = "windows")]
+            SettingsCommand::SetRequestElevationOnStartup {
+                expected_config_revision,
+                enabled,
+                reply,
+            } => {
+                let result = check_revision(&application, expected_config_revision)
+                    .and_then(|()| {
+                        application
+                            .set_request_elevation_on_startup(enabled)
+                            .map_err(map_application_error)
+                    })
+                    .map(|()| snapshot(&application, &mut clock, false, startup_item.state()));
+                let _ = reply.respond(result);
+            }
             SettingsCommand::SettingsWindowPlacementChanged => {
                 if persist_window_state(&mut application, &window_state).is_err() {
                     application.record_log_once(

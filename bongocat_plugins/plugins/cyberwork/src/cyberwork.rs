@@ -390,12 +390,7 @@ impl CyberWorkState {
     }
 
     fn present_counter(&mut self) {
-        let history_visible = self
-            .ui
-            .app_handle()
-            .and_then(|app| app.get_webview_window(HISTORY_LABEL))
-            .and_then(|window| window.is_visible().ok())
-            .unwrap_or(false);
+        let history_visible = self.ui.window_is_open(HISTORY_LABEL);
         let base_show = !history_visible
             && self.pet_state.as_ref().is_some_and(|state| state.visible)
             && self.mode() != CounterMode::Hidden
@@ -420,10 +415,18 @@ impl CyberWorkState {
         };
         let ui = self.ui.clone();
         let main_app = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let Some(window) = main_app.get_webview_window(COUNTER_LABEL) else {
+        let _ = self.ui.dispatch_window(move |_app| {
+            let window = if show {
+                bongocat_companion::ensure_window(&main_app, COUNTER_LABEL).ok()
+            } else {
+                main_app.get_webview_window(COUNTER_LABEL)
+            };
+            let Some(window) = window else {
                 return;
             };
+            if show {
+                let _ = window.set_ignore_cursor_events(true);
+            }
             if let Some(geometry) = geometry {
                 let _ = window.set_size(PhysicalSize::new(geometry.width, geometry.height));
                 let _ = window.set_position(PhysicalPosition::new(geometry.x, geometry.y));
@@ -432,7 +435,7 @@ impl CyberWorkState {
                 let _ = window.show();
                 ui.emit(UiEvent::StateChanged);
             } else {
-                let _ = window.hide();
+                let _ = window.destroy();
             }
         });
         self.counter_shown = show;
@@ -525,20 +528,20 @@ impl CyberWorkState {
 
     fn open_history(&mut self) {
         self.pending_history = true;
+        self.ui.set_window_open(HISTORY_LABEL, true);
         let Some(app) = self.ui.app_handle() else {
             return;
         };
         let geometry = self.history_geometry();
         let ui = self.ui.clone();
         let main_app = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            if let Some(window) = main_app.get_webview_window(HISTORY_LABEL) {
+        let _ = self.ui.dispatch_window(move |_app| {
+            if let Ok(window) = bongocat_companion::ensure_window(&main_app, HISTORY_LABEL) {
                 if let Some(geometry) = geometry {
                     let _ = window.set_size(PhysicalSize::new(geometry.width, geometry.height));
                     let _ = window.set_position(PhysicalPosition::new(geometry.x, geometry.y));
                 }
                 let _ = window.show();
-                let _ = window.set_focus();
             }
             ui.emit(UiEvent::Open {
                 kind: "history".into(),

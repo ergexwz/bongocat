@@ -54,6 +54,20 @@ impl Application {
         Ok(())
     }
 
+    pub fn set_request_elevation_on_startup(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), ApplicationError> {
+        let mut next_config = self.config.clone();
+        next_config.system.request_elevation_on_startup = enabled;
+        let next_revision = self
+            .config_store
+            .commit_if_revision(&next_config, self.ready_config_revision()?)?;
+        self.config = next_config;
+        self.config_revision = Some(next_revision);
+        Ok(())
+    }
+
     pub fn set_status_icon_visible(&mut self, visible: bool) -> Result<(), ApplicationError> {
         let mut next_config = self.config.clone();
         next_config.system.show_status_icon = visible;
@@ -127,35 +141,48 @@ impl Application {
         Ok(())
     }
 
-    /// Change the overlay's visibility for this session only.
-    ///
-    /// Visibility is runtime state, not a user preference: a fresh process
-    /// always presents the overlay, while a shortcut or settings command can
-    /// hide it until shutdown. The settings worker still supplies the current
-    /// config revision as a stale-view guard, but this command never writes
-    /// `config.json`.
+    /// Persist an explicit show/hide choice and apply it to the runtime.
+    /// Temporary occlusion, hover hiding and idle hiding never call this setter.
     pub fn set_overlay_visible(
         &mut self,
         visible: bool,
     ) -> Result<RuntimeSnapshot, ApplicationError> {
-        let client = self.runtime.client();
-        let sequence = client
-            .send(RuntimeCommand::SetOverlayVisible(visible))
-            .map_err(ApplicationError::RuntimeCommand)?;
-        let snapshot = client
-            .wait_for_command(sequence, RUNTIME_TIMEOUT)
-            .ok_or(ApplicationError::RuntimeDidNotPublish)?;
-        if snapshot
-            .last_command_failure
-            .is_some_and(|failure| failure.sequence == sequence)
-        {
-            return Err(ApplicationError::RuntimeCommandFailed(
-                snapshot
-                    .last_command_failure
-                    .expect("checked command failure"),
-            ));
+        let mut next_config = self.config.clone();
+        next_config.overlay.visible = visible;
+        let next_revision = self
+            .config_store
+            .commit_if_revision(&next_config, self.ready_config_revision()?)?;
+        let runtime_result = (|| {
+            let client = self.runtime.client();
+            let sequence = client
+                .send(RuntimeCommand::SetOverlayVisible(visible))
+                .map_err(ApplicationError::RuntimeCommand)?;
+            let snapshot = client
+                .wait_for_command(sequence, RUNTIME_TIMEOUT)
+                .ok_or(ApplicationError::RuntimeDidNotPublish)?;
+            if let Some(failure) = snapshot
+                .last_command_failure
+                .filter(|failure| failure.sequence == sequence)
+            {
+                return Err(ApplicationError::RuntimeCommandFailed(failure));
+            }
+            Ok(snapshot)
+        })();
+        match runtime_result {
+            Ok(snapshot) => {
+                self.config = next_config;
+                self.config_revision = Some(next_revision);
+                Ok(snapshot)
+            }
+            Err(error) => {
+                let rollback_revision = self
+                    .config_store
+                    .commit_if_revision(&self.config, next_revision)
+                    .map_err(ApplicationError::ConfigRollback)?;
+                self.config_revision = Some(rollback_revision);
+                Err(error)
+            }
         }
-        Ok(snapshot)
     }
 
     pub fn set_overlay_settings(

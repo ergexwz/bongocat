@@ -5,7 +5,6 @@ mod cyberwork;
 use bongocat_companion::{UiBridge, data_dir, ensure_data_dir, run_host};
 use cyberwork::{AppState, CyberWorkState};
 use std::sync::Arc;
-use tauri::{Manager, WindowEvent};
 
 fn main() {
     let directory = data_dir("com.bongocat.cyberwork");
@@ -16,6 +15,7 @@ fn main() {
 
     let app_state = AppState { state };
 
+    let window_presence = ui.clone();
     tauri::Builder::default()
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
@@ -25,14 +25,6 @@ fn main() {
             cyberwork::get_locale,
         ])
         .setup(move |app| {
-            if let Some(window) = app.get_webview_window("counter") {
-                let _ = window.set_ignore_cursor_events(true);
-                let _ = window.set_focusable(false);
-                let _ = window.set_always_on_top(true);
-            }
-            if let Some(window) = app.get_webview_window("history") {
-                let _ = window.set_always_on_top(true);
-            }
             let stop_pending = ui.attach(app.handle().clone());
             if stop_pending {
                 app.handle().exit(0);
@@ -51,14 +43,19 @@ fn main() {
                 })?;
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // The host owns the process lifetime. Closing a panel hides it
-                // so the same window can be shown again from the plugin menu.
-                api.prevent_close();
-                let _ = window.hide();
+        .on_window_event(move |window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window_presence.set_window_open(window.label(), false);
             }
         })
-        .run(tauri::generate_context!())
-        .expect("bongocat cyberwork plugin");
+        .build(tauri::generate_context!())
+        .expect("bongocat cyberwork plugin")
+        .run(|_, event| {
+            if let tauri::RunEvent::ExitRequested {
+                api, code: None, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
 }

@@ -20,12 +20,14 @@ fn service_uses_defaults_when_current_and_backups_are_invalid() {
             false,
         )
         .expect("business command remains available");
-    assert_eq!(updated.config_revision, snapshot.config_revision);
+    assert_ne!(updated.config_revision, snapshot.config_revision);
     client.shutdown_blocking().expect("service shutdown");
     service.join().expect("service join");
 
     let reloaded = store.load_or_default().expect("reloaded defaults").config;
-    assert_eq!(reloaded, bongocat_config::NativeConfig::default());
+    let mut expected = bongocat_config::NativeConfig::default();
+    expected.overlay.visible = false;
+    assert_eq!(reloaded, expected);
     assert!(
         std::fs::read_dir(&layout.backups)
             .expect("backup directory")
@@ -149,7 +151,7 @@ fn service_advances_settings_revision_once_for_one_control_change() {
         )
         .expect("toggle overlay visibility");
     assert_eq!(updated.revision, initial.revision.saturating_add(1));
-    assert_eq!(updated.config_revision, initial.config_revision);
+    assert_ne!(updated.config_revision, initial.config_revision);
 
     client.shutdown_blocking().expect("service shutdown");
     service.join().expect("service join");
@@ -593,7 +595,7 @@ fn service_orders_updates_persists_them_and_stops_runtime() {
     assert!(audio_enabled.motion_audio_enabled);
 
     let persisted = std::fs::read_to_string(config_path).expect("persisted config");
-    assert!(!persisted.contains("\"visible\""));
+    assert!(persisted.contains("\"visible\": false"));
     assert!(persisted.contains("\"play_motion_audio\": true"));
     assert!(persisted.contains("\"selected_model\": {"));
     assert!(persisted.contains("\"id\": \"keyboard\""));

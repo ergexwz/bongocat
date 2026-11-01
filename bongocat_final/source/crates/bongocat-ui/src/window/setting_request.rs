@@ -328,6 +328,27 @@ impl SettingsView {
                         )
                         .await
                 }
+                #[cfg(target_os = "windows")]
+                Some(SettingValue::OpenWindowsPermissionSettings) => {
+                    client.open_windows_permission_settings().await
+                }
+                #[cfg(target_os = "windows")]
+                Some(SettingValue::RepairWindowsPluginRuntime) => {
+                    client.repair_windows_plugin_runtime().await
+                }
+                #[cfg(target_os = "windows")]
+                Some(SettingValue::RequestWindowsElevation) => {
+                    client.request_windows_elevation().await
+                }
+                #[cfg(target_os = "windows")]
+                Some(SettingValue::RequestElevationOnStartup {
+                    expected_config_revision,
+                    enabled,
+                }) => {
+                    client
+                        .set_request_elevation_on_startup(expected_config_revision, enabled)
+                        .await
+                }
                 Some(SettingValue::StartupItemEnabled(enabled)) => {
                     client.set_startup_item_enabled(enabled).await
                 }

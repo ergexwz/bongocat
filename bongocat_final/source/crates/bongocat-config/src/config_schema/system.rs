@@ -21,4 +21,7 @@ pub struct SystemConfig {
     /// icon, including when minimized. This preference does not close windows.
     pub show_dock_icon: bool,
     pub show_status_icon: bool,
+    /// User opt-in only; startup always begins with the ordinary user token.
+    #[serde(default)]
+    pub request_elevation_on_startup: bool,
 }

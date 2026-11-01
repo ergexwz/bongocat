@@ -474,6 +474,10 @@
           "minimum": 25,
           "type": "integer"
         },
+        "visible": {
+          "default": true,
+          "type": "boolean"
+        },
         "window_background_color": {
           "default": [
             0,
@@ -589,6 +593,10 @@
     "SystemConfig": {
       "additionalProperties": false,
       "properties": {
+        "request_elevation_on_startup": {
+          "default": false,
+          "type": "boolean"
+        },
         "show_dock_icon": {
           "type": "boolean"
         },

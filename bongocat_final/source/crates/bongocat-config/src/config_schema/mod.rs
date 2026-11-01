@@ -72,6 +72,7 @@ impl Default for NativeConfig {
                 language: Language::default(),
             },
             overlay: OverlayConfig {
+                visible: true,
                 window_mode: false,
                 window_background_color: overlay::default_window_background_color(),
                 click_through: false,
@@ -120,6 +121,7 @@ impl Default for NativeConfig {
                 show_taskbar_icon: false,
                 show_dock_icon: false,
                 show_status_icon: true,
+                request_elevation_on_startup: false,
             },
             updates: UpdateConfig {
                 check_automatically: false,

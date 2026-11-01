@@ -82,6 +82,11 @@ pub fn startup_permission_available() -> bool {
 /// it does not, the prompt is presented once and the user decides whether the product keeps
 /// starting with reduced input coverage or opens the platform permission flow.
 pub fn check_startup_permission(prompt: &StartupPermissionPrompt) -> StartupPermissionStatus {
+    // Elevation is optional on Windows. A fresh install must not repeatedly ask
+    // the user to enable a persistent administrator compatibility flag.
+    if cfg!(target_os = "windows") {
+        return StartupPermissionStatus::Satisfied;
+    }
     if platform::available() {
         return StartupPermissionStatus::Satisfied;
     }
@@ -541,6 +546,15 @@ mod tests {
             secondary: "secondary".to_owned(),
             locale: "en-US".to_owned(),
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn ordinary_windows_startup_never_opens_a_permission_prompt() {
+        assert_eq!(
+            check_startup_permission(&prompt()),
+            StartupPermissionStatus::Satisfied
+        );
     }
 
     #[test]

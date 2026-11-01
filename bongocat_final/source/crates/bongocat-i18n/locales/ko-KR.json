@@ -333,7 +333,9 @@
       "dock_icon_update_failed": "Dock 아이콘을 변경할 수 없습니다.",
       "window_hide_failed": "설정 창을 숨길 수 없습니다",
       "window_layout_save_failed": "창 배치를 저장할 수 없습니다",
-      "application_shutdown_failed": "BongoCat을 완전히 종료할 수 없습니다"
+      "application_shutdown_failed": "BongoCat을 완전히 종료할 수 없습니다",
+      "elevation_failed": "The same-account elevation handoff failed. Continue with ordinary permissions.",
+      "plugin_dependency_failed": "Restart with ordinary permissions and retry. If it still fails, reinstall using the complete installer with its offline runtime."
     }
   },
   "settings": {
@@ -562,6 +564,15 @@
         "unsupported_platform": "이 시스템에서는 자동 시작을 사용할 수 없습니다",
         "unsupported_os": "이 운영체제에서는 자동 시작을 사용할 수 없습니다",
         "unsupported_build": "개발 빌드에서는 자동 시작을 사용할 수 없습니다"
+      },
+      "elevation": {
+        "once": "Restart with administrator permissions once",
+        "request": "Request elevation",
+        "every_start": "Request UAC elevation on future starts",
+        "description": "Ordinary permissions are the default. Cancelling UAC keeps the app running. Same account only; elevation does not establish anti-cheat compatibility.",
+        "legacy": "Inspect legacy administrator compatibility settings",
+        "runtime": "Install or repair the plugin WebView2 runtime",
+        "open": "Open"
       }
     }
   },

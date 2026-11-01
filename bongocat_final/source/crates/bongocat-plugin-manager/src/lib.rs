@@ -9,7 +9,10 @@ use bongocat_plugin_sdk::PluginMetadata;
 pub use catalog::{CATALOG_NAME, Catalog, CatalogEntry, CatalogError, parse_catalog, sha256_of};
 pub use registry::{PluginRegistry, PluginState, RegistryError};
 use serde::{Deserialize, Serialize};
-pub use source::{AvailablePlugin, PluginSource, is_newer};
+pub use source::{
+    AvailablePlugin, PluginSource, is_newer, verified_bundled_plugins,
+    verified_bundled_plugins_with_pin,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
