@@ -9,6 +9,7 @@
 ### 🐛 Bug Fixes
 
 - Fixed the Windows login startup task continuing to launch an old executable after the application folder moved.
+- Fixed the model window being hidden by DWM-composed borderless fullscreen games on Windows.
 
 ## 2.4.0 - 2026-10-26
 

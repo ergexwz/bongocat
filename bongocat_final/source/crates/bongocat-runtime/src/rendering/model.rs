@@ -27,7 +27,12 @@ impl RuntimeRenderer {
         committed: &CommittedModel,
         input: ModelInputSnapshot,
     ) -> Result<ModelCommitToken, RuntimeRenderErrorCode> {
-        debug_assert!(self.pending.is_none());
+        // A pending activation may already exist, and replacing it is the
+        // documented handshake: a commit that arrives for the replaced token is
+        // rejected by generation. A startup activation that expired before its
+        // prepare completed is retried while no overlay frame source exists yet,
+        // so the previous pending model can never be committed and must be
+        // dropped here instead of being kept.
         let mut model = Live2dModel::load(committed)
             .map_err(|error| map_live2d_error(error, RuntimeRenderErrorCode::ModelLoadFailed))?;
         let resources = model.render_resources();

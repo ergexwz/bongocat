@@ -140,6 +140,40 @@ fn overlay_window_owns_its_taskbar_button_at_creation() {
     assert!(!hidden.taskbar_icon_is_visible());
 }
 
+/// The pet must always be a layered top-level window, not only while
+/// click-through is on.
+///
+/// A borderless fullscreen game can present through DirectFlip and bypass DWM.
+/// A visible layered window is composed by DWM, so the game cannot take that
+/// path without the pet being composited too. Click-through only adds the
+/// pointer-transparent bit; it must not be the condition that makes the pet a
+/// layered window.
+#[test]
+fn a_pet_window_is_layered_so_dwm_composes_it_over_fullscreen_games() {
+    let canvas = CanvasInfo {
+        width: 2048.0,
+        height: 1188.0,
+        origin_x: 1024.0,
+        origin_y: 594.0,
+        pixels_per_unit: 1024.0,
+    };
+    let window = OverlayWindow::create(OverlaySessionOptions::default(), canvas, None, None, None)
+        .expect("create the model window");
+    // SAFETY: the test owns the live HWND and reads its extended style on the
+    // creation thread.
+    let style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(window.hwnd, GWL_EXSTYLE) } as u32);
+    assert!(
+        style.contains(WS_EX_LAYERED),
+        "the pet window must stay in DWM's layered composition path"
+    );
+    assert!(
+        !style.contains(WS_EX_TRANSPARENT),
+        "click-through is off by default, so the window must not eat input"
+    );
+    assert!(style.contains(WS_EX_TOPMOST));
+    assert!(style.contains(WS_EX_NOREDIRECTIONBITMAP));
+}
+
 /// Toggling the taskbar button in place must survive a model switch, which
 /// replaces the HWND, so the applied value is recorded on the session options
 /// the replacement window is created from.

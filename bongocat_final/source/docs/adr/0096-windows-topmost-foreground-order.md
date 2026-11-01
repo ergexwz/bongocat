@@ -57,3 +57,7 @@ setting. Exclusive fullscreen bypassing DWM and secure desktops are not ordinary
 desktop Z-order and cannot be covered by this guard. Other applications actively
 fighting for topmost order remain a platform limitation. No local state cleanup
 is required; macOS and startup registration are unchanged.
+
+Borderless fullscreen games that are covered despite a correct Z order are a
+separate composition-layer problem, not this guard: see ADR-0099 for the
+layered-window contract that keeps DWM composing the pet over DirectFlip.

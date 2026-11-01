@@ -45,7 +45,8 @@ mod update_schedule;
 
 use async_io::Timer;
 use bongocat_app::{
-    ApplicationLogCode, ApplicationLogContext, ApplicationLogEvent, application_shortcut_dispatcher,
+    ApplicationLogCode, ApplicationLogContext, ApplicationLogEvent, ApplicationLogHandle,
+    application_shortcut_dispatcher,
 };
 use bongocat_live2d::CoreLogHandle;
 use bongocat_overlay::{
@@ -654,7 +655,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(error) = application.shutdown() {
                     record_failure(&run_failures, error.to_string());
                 }
-                quit_after_startup_failure(cx, &run_failures);
+                quit_after_startup_failure(cx, &application_log, &run_failures);
                 return;
             }
         };
@@ -676,7 +677,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(error) = overlay.stop_input() {
                         record_failure(&run_failures, error.to_string());
                     }
-                    quit_after_startup_failure(cx, &run_failures);
+                    quit_after_startup_failure(cx, &application_log, &run_failures);
                     return;
                 }
             };
@@ -693,7 +694,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = client.shutdown_blocking();
                 let _ = settings_service.join();
                 let _ = overlay.finish_after_runtime_shutdown();
-                quit_after_startup_failure(cx, &run_failures);
+                quit_after_startup_failure(cx, &application_log, &run_failures);
                 return;
             }
         };
@@ -717,7 +718,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(error) = overlay.finish_after_runtime_shutdown() {
                     record_failure(&run_failures, error.to_string());
                 }
-                quit_after_startup_failure(cx, &run_failures);
+                quit_after_startup_failure(cx, &application_log, &run_failures);
                 return;
             }
         };
@@ -746,7 +747,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(error) = overlay.finish_after_runtime_shutdown() {
                     record_failure(&run_failures, error.to_string());
                 }
-                quit_after_startup_failure(cx, &run_failures);
+                quit_after_startup_failure(cx, &application_log, &run_failures);
                 return;
             }
         };

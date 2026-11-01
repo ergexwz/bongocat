@@ -113,17 +113,23 @@ impl OverlayWindow {
         let mut extended = if options.window_mode {
             WS_EX_APPWINDOW
         } else {
+            // The pet is always a layered window, even when click-through is
+            // off. DWM always composites a visible layered top-level window, so
+            // a borderless fullscreen game's DirectFlip/independent-flip path
+            // can no longer bypass the pet and leave it invisible behind the
+            // game. The DirectComposition visual still supplies every pixel;
+            // layering is the composition contract, not pointer transparency.
             taskbar_ex_style(options.taskbar_icon_visible)
                 | WS_EX_NOACTIVATE
                 | WS_EX_NOREDIRECTIONBITMAP
+                | WS_EX_LAYERED
         };
         if options.click_through && !options.window_mode {
-            // `WS_EX_TRANSPARENT` alone leaves a DirectComposition-backed
-            // top-level window on the desktop input path: `WM_NCHITTEST`
-            // returns `HTTRANSPARENT`, but a real click still selects this
-            // HWND. Layering is the Win32 pair that makes the whole window
-            // pass through to the window underneath it.
-            extended |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
+            // `WS_EX_TRANSPARENT` is the hit-testing half of click-through.
+            // Layering is what makes the whole window pass through to the
+            // window underneath it, but it is already set for every pet
+            // window, so only the transparent bit changes here.
+            extended |= WS_EX_TRANSPARENT;
         }
         let scale = options.scale_percent;
         let (logical_width, logical_height) = sizing.dimensions_for_scale(96, scale);
@@ -510,12 +516,19 @@ impl OverlayWindow {
         // window; `SWP_FRAMECHANGED` refreshes the cached non-client state
         // after the style update.
         unsafe {
-            let click_through_style = WS_EX_TRANSPARENT.0 as isize | WS_EX_LAYERED.0 as isize;
+            let transparent_style = WS_EX_TRANSPARENT.0 as isize;
             let mut style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
             if click_through {
-                style |= click_through_style;
+                style |= transparent_style;
             } else {
-                style &= !click_through_style;
+                style &= !transparent_style;
+            }
+            if !self._state.window_mode {
+                // Layering is part of the pet's presentation contract, not of
+                // click-through: it keeps DWM compositing the pet over a
+                // borderless fullscreen game. Turning pointer transparency off
+                // must never put the pet back on the bypassed composition path.
+                style |= WS_EX_LAYERED.0 as isize;
             }
             SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style);
             SetWindowPos(

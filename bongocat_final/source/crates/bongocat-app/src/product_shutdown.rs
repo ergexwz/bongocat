@@ -81,10 +81,22 @@ pub(crate) fn product_failures_exit_code(failures: &Arc<Mutex<Vec<String>>>) -> 
 ///
 /// An automated run must still report startup failure: a bare `cx.quit()` could
 /// terminate with status 0. Exit directly when anything was recorded; otherwise
-/// quit normally.
-pub(crate) fn quit_after_startup_failure(cx: &mut App, failures: &Arc<Mutex<Vec<String>>>) {
+/// quit normally. The exit also records an anonymous startup-failure event: the
+/// process leaves before any window exists, and a login item's stderr is
+/// discarded by the scheduler that started it, so without the event a launch
+/// that shows no pet would leave no reason anywhere.
+pub(crate) fn quit_after_startup_failure(
+    cx: &mut App,
+    application_log: &ApplicationLogHandle,
+    failures: &Arc<Mutex<Vec<String>>>,
+) {
     let exit_code = product_failures_exit_code(failures);
     if exit_code != 0 {
+        application_log.record(
+            ApplicationLogEvent::new(ApplicationLogCode::StartupFailed)
+                .with_context(ApplicationLogContext::Phase("product_startup"))
+                .with_context(ApplicationLogContext::Reason("startup_step_failed")),
+        );
         std::process::exit(exit_code);
     }
     cx.quit();

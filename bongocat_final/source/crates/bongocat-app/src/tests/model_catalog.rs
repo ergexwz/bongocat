@@ -41,6 +41,24 @@ fn missing_selected_model_falls_back_to_the_standard_preset_at_startup() {
             .model_selection_fallback,
         1
     );
+    // The startup ends with an error here, and a process that leaves before any
+    // window exists must still explain itself in the log the user can read.
+    let logged = std::fs::read_dir(&layout.logs)
+        .expect("log directory")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("application-")
+        })
+        .map(|entry| std::fs::read_to_string(entry.path()).expect("read log"))
+        .collect::<String>();
+    assert!(
+        logged.contains("application/startup_failed"),
+        "a startup that cannot present a model must record why: {logged}"
+    );
+    assert!(logged.contains("phase=model_restore"));
     let persisted = std::fs::read_to_string(&layout.config).expect("persisted config");
     assert!(persisted.contains("\"standard\""));
     application.shutdown().expect("clean shutdown");

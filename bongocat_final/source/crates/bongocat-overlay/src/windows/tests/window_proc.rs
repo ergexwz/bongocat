@@ -270,7 +270,9 @@ fn click_through_style_pairs_layered_and_transparent_hit_testing() {
     // the creation thread.
     let style = unsafe { GetWindowLongPtrW(window.hwnd, GWL_EXSTYLE) };
     assert_eq!(style & transparent, 0);
-    assert_eq!(style & layered, 0);
+    // Layering is what keeps DWM compositing the pet over a borderless
+    // fullscreen game; disabling pointer transparency must not remove it.
+    assert_ne!(style & layered, 0);
 
     window
         .set_click_through(true)

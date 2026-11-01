@@ -14,6 +14,7 @@ use bongocat_model::{CommittedModel, ModelId, ModelOrigin};
 use bongocat_render::ModelCommitToken;
 use bongocat_runtime::{ExpressionId, MotionId, MotionPriority, RuntimeCommand, RuntimeSnapshot};
 use std::sync::Arc;
+use std::time::Duration;
 
 impl Application {
     pub fn start_motion(
@@ -56,6 +57,22 @@ impl Application {
         origin: ModelOrigin,
         id: impl Into<String>,
     ) -> Result<ModelCommitToken, ApplicationError> {
+        self.prepare_model_with_timeout(origin, id, RUNTIME_TIMEOUT)
+    }
+
+    /// Prepare a model and wait for the runtime's prepared report for `timeout`.
+    ///
+    /// The budget is a parameter because the startup restore loads the model
+    /// cold, which can take several seconds on a machine that has just woken up,
+    /// while an interactive command keeps the short budget a user is waiting on.
+    /// A caller that can retry a transient expiry decides how long to wait; this
+    /// method only reports that the runtime did not publish a prepared model.
+    pub(crate) fn prepare_model_with_timeout(
+        &mut self,
+        origin: ModelOrigin,
+        id: impl Into<String>,
+        timeout: Duration,
+    ) -> Result<ModelCommitToken, ApplicationError> {
         self.application_log.record(
             ApplicationLogEvent::new(ApplicationLogCode::ModelPrepareStarted)
                 .with_context(ApplicationLogContext::Operation("model_activation")),
@@ -76,7 +93,7 @@ impl Application {
                 })
                 .map_err(ApplicationError::RuntimeCommand)?;
             let snapshot = client
-                .wait_for_model_preparation(sequence, RUNTIME_TIMEOUT)
+                .wait_for_model_preparation(sequence, timeout)
                 .ok_or(ApplicationError::RuntimeDidNotPrepareModel)?;
             if let Some(failure) = snapshot
                 .last_command_failure

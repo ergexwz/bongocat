@@ -837,8 +837,16 @@ Windows 验收覆盖 PixPin `Ctrl+Alt+A`、Win+L、PrintScreen、UAC、管理员
   以 `SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE` 重新断言（ADR-0096）。普通前台窗口只需读取样式，
   topmost 前台窗口通过同步 `EnumWindows` 检查顺序，不逐帧无条件抬升，也不压过本来就在模型上方的
   菜单或提示。不移动、不缩放、不抢焦点，也不与用户已关闭的开关对抗（开关值随窗口状态
-  记录，tick 读同一份）。独占全屏（exclusive fullscreen）应用会接管显示输出，任何普通窗口都无法
-  覆盖，这是 Windows 的限制，不属于该守卫的范围。
+  记录，tick 读同一份）。Z 序之外还有合成层：桌宠窗口在宠物模式下**始终**带
+  `WS_EX_LAYERED`（`WS_EX_NOREDIRECTIONBITMAP` 与 DirectComposition visual 保留），
+  因为 DWM 必定合成可见的 layered 顶层窗口，由 DWM 合成的无边框/窗口化全屏游戏无法再用
+  DirectFlip/独立翻转绕过桌宠；鼠标穿透只切换 `WS_EX_TRANSPARENT`，关闭穿透不清除 layered 位
+  （ADR-0099）。代价是桌宠覆盖游戏时该游戏退回 DWM 合成，DirectFlip 与 G-Sync/FreeSync 可能
+  暂时失效；这是覆盖层可见性的固有代价，不是守卫能同时避免的。以 D3D 全屏呈现的游戏
+  （`SHQueryUserNotificationState` 返回 `QUNS_RUNNING_D3D_FULL_SCREEN`，例如《星露谷物语》
+  选择「窗口无边框」时）仍会遮住桌宠，因为系统层面没有任何普通窗口能覆盖该呈现；安全做法是
+  让游戏以窗口模式运行并最大化，或接受该游戏限制。独占全屏（exclusive fullscreen）应用会接管
+  显示输出，任何普通窗口都无法覆盖，这是 Windows 的限制，不属于该守卫或 layered 合成的范围。
 - Renderer：D3D11 + DXGI；桌宠使用 DirectComposition/DWM 与预乘 alpha，普通窗口使用
   不透明 HWND blt swap chain，同时支持 OBS BitBlt 与 Windows Graphics Capture。
 - DPI：Per-Monitor-V2，处理 `WM_DPICHANGED`、显示器热插拔和负坐标。
