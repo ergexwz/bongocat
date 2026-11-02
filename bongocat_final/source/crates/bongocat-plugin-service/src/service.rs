@@ -401,6 +401,8 @@ struct Worker {
     endpoint: PluginServiceEndpoint,
     hud: OverlaySinks,
     compositor: Option<HudCompositor>,
+    hud_last_used: Instant,
+    hud_font_failed: bool,
     /// Store/catalog failures. Command refusals travel in their typed reply.
     error: Option<String>,
     interaction_failures: std::collections::BTreeMap<String, crate::PluginInteractionFailure>,
@@ -486,6 +488,15 @@ fn run(
         }
         return Ok(());
     };
+    if matches!(
+        &source,
+        PluginSource::Production {
+            bundled_catalog_sha256: Some(_),
+            ..
+        }
+    ) {
+        manager.retire_legacy_plugins();
+    }
     let mut error = None;
     if let Err(failure) = manager.discover_plugins() {
         error = Some(failure.to_string());
@@ -512,7 +523,9 @@ fn run(
         input_events,
         endpoint,
         hud,
-        compositor: load_platform_font().ok().map(HudCompositor::new),
+        compositor: None,
+        hud_last_used: Instant::now(),
+        hud_font_failed: false,
         error,
         interaction_failures: Default::default(),
         last_signature: None,
@@ -823,7 +836,9 @@ impl Worker {
         let offers = self
             .offers
             .iter()
-            .filter(|offer| offer.icon_url.starts_with("https://"))
+            .filter(|offer| {
+                offer.icon_url.starts_with("https://") || offer.local_package_path().is_some()
+            })
             .cloned()
             .collect::<Vec<_>>();
         if offers.is_empty() {
@@ -943,6 +958,7 @@ impl Worker {
         let icon_urls = self
             .offers
             .iter()
+            .filter(|offer| !offer.icon_url.is_empty())
             .map(|offer| (offer.metadata.id.clone(), offer.icon_url.clone()))
             .collect::<std::collections::BTreeMap<_, _>>();
         let mut cards: Vec<PluginCard> = self
@@ -1371,15 +1387,27 @@ impl Worker {
 
     /// Publish the plugins' current views only when their composed input changed.
     fn compose(&mut self) {
-        let Some(compositor) = self.compositor.as_ref() else {
-            return;
-        };
         let viewport = self.hud.viewport.latest();
         let frames = if viewport.is_usable() {
             self.running_frames()
         } else {
             Vec::new()
         };
+        let has_content = frames.iter().any(|frame| !frame.view.nodes.is_empty());
+        if has_content {
+            self.hud_last_used = Instant::now();
+            if self.compositor.is_none() && !self.hud_font_failed {
+                match load_platform_font() {
+                    Ok(font) => self.compositor = Some(HudCompositor::new(font)),
+                    Err(failure) => {
+                        self.hud_font_failed = true;
+                        self.error = Some(failure.to_string());
+                    }
+                }
+            }
+        } else if self.hud_last_used.elapsed() >= Duration::from_secs(30) {
+            self.compositor = None;
+        }
         let signature = LayerSignature {
             viewport,
             frames: frames.clone(),
@@ -1387,10 +1415,11 @@ impl Worker {
         if self.last_signature.as_ref() == Some(&signature) {
             return;
         }
-        let layer = if viewport.is_usable() {
-            compositor
-                .compose(viewport, &frames)
-                .unwrap_or_else(|_| HudLayer::empty())
+        let layer = if has_content && viewport.is_usable() {
+            self.compositor
+                .as_ref()
+                .and_then(|compositor| compositor.compose(viewport, &frames).ok())
+                .unwrap_or_else(HudLayer::empty)
         } else {
             HudLayer::empty()
         };
@@ -1461,6 +1490,8 @@ mod tests {
                 interactions,
             },
             compositor: None,
+            hud_last_used: Instant::now(),
+            hud_font_failed: false,
             error: None,
             interaction_failures: Default::default(),
             last_signature: None,

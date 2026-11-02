@@ -55,6 +55,7 @@ pub struct PluginManifest {
 
 pub struct PluginManager {
     registry: PluginRegistry,
+    retire_legacy: bool,
     plugin_dir: PathBuf,
 }
 impl PluginManager {
@@ -62,8 +63,12 @@ impl PluginManager {
         fs::create_dir_all(&plugin_dir)?;
         Ok(Self {
             registry: PluginRegistry::new(),
+            retire_legacy: false,
             plugin_dir,
         })
+    }
+    pub fn retire_legacy_plugins(&mut self) {
+        self.retire_legacy = true;
     }
     pub fn plugin_dir(&self) -> &Path {
         &self.plugin_dir
@@ -113,6 +118,17 @@ impl PluginManager {
         }
         let manifest = install::inspect_package_with_limit(bytes, limit)?;
         let id = &manifest.metadata.id;
+        if self.retire_legacy
+            && matches!(
+                id.as_str(),
+                "com.bongocat.pomodoro" | "com.bongocat.input-source" | "com.bongocat.key-sounds"
+            )
+        {
+            return Err(PluginManagerError::UnsafeManifest(
+                "this bundled distribution retired the plugin".into(),
+            ));
+        }
+
         if !supports_application(&manifest.metadata) {
             return Err(PluginManagerError::UnsafeManifest(
                 "plugin excludes this application version".into(),
@@ -302,6 +318,16 @@ impl PluginManager {
                 }
             };
             let id = entry.file_name().to_string_lossy().into_owned();
+            if self.retire_legacy
+                && matches!(
+                    id.as_str(),
+                    "com.bongocat.pomodoro"
+                        | "com.bongocat.input-source"
+                        | "com.bongocat.key-sounds"
+                )
+            {
+                continue;
+            }
             let Some(root) = install::selected_root(&self.plugin_dir, &id) else {
                 continue;
             };

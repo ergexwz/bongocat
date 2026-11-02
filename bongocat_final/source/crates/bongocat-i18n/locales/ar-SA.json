@@ -422,6 +422,12 @@
       },
       "maximum_fps": {
         "label": "أقصى عدد إطارات في الثانية"
+      },
+      "quality": {
+        "label": "Quality",
+        "low": "Low (less memory)",
+        "medium": "Medium",
+        "high": "High (original)"
       }
     },
     "models": {

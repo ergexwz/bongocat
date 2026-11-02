@@ -22,6 +22,8 @@ mod tests;
 mod transport;
 mod worker;
 
+pub use bongocat_config::RenderQuality;
+
 use bongocat_audio::{
     MotionAudioClient, MotionAudioCommand, MotionAudioDiagnostics, MotionAudioStopReason,
     MotionAudioVolume,
@@ -191,6 +193,7 @@ pub const fn idle_hide_delay_ms(seconds: u32) -> u32 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OverlaySettings {
+    pub render_quality: bongocat_config::RenderQuality,
     pub window_mode: bool,
     pub window_background_color: [u8; 3],
     pub click_through: bool,
@@ -236,6 +239,7 @@ pub struct OverlaySettings {
 impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
+            render_quality: Default::default(),
             window_mode: false,
             window_background_color: [0, 255, 0],
             click_through: false,

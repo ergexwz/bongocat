@@ -63,6 +63,7 @@ pub(crate) const fn settings_logging_from_config(
 
 pub(crate) fn overlay_settings_from_config(config: &NativeConfig) -> OverlaySettings {
     OverlaySettings {
+        render_quality: config.overlay.render_quality,
         window_mode: config.overlay.window_mode,
         window_background_color: config.overlay.window_background_color,
         click_through: config.overlay.click_through,

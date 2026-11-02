@@ -422,6 +422,12 @@
       },
       "maximum_fps": {
         "label": "最大影格率"
+      },
+      "quality": {
+        "label": "畫質",
+        "low": "低（省記憶體）",
+        "medium": "中",
+        "high": "高（原畫質）"
       }
     },
     "models": {

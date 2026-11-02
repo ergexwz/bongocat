@@ -4,7 +4,7 @@
 
 ### ✨ Features
 
-- Reduce Windows key-overlay texture allocations and companion-panel memory, keep background work running without competing for foreground window order, and offer optional UAC restart instead of repeated administrator prompts. Provide a per-user installer with a selectable location, bundled companions and offline dependencies.
+- Bundle Todo, Mail and Cyber Work in Plugin Center, retiring previous bundled plugins while retaining their data. Add three quality levels and 30/60 FPS choices, default upgrades to low quality at 30 FPS, and reduce texture, mask, capture and idle plugin UI memory.
 - Added nested companion-plugin menus, pet model/visibility messages and anonymous input-activity support for the Cyber Work counter.
 
 ### 🐛 Bug Fixes

@@ -1,0 +1,170 @@
+{
+  "version": "2.5.2",
+  "installer_sha256": "71988020ed5502bdbacf09199593c407a194c41496b7e99bebfe0e719739f9c0",
+  "production_host_sha256": "62d33db72cf1851497cf5a85802ba62cbdf2d21b98f410d007c240d463d42c7d",
+  "unsigned": true,
+  "extracted_payload_tests": 2,
+  "native_settings_smoke_exit": 0,
+  "resource_build": "Release Development with repository-local profile injection",
+  "samples": {
+    "high": {
+      "samples": 5,
+      "lastSecond": 42.01,
+      "median": {
+        "MainPrivateMiB": 104.91,
+        "MainWorkingMiB": 74.895,
+        "MainPrivateWorkingMiB": 26.242,
+        "PluginPrivateMiB": 12.27,
+        "WebViewPrivateMiB": 165.176,
+        "Handles": 927.0,
+        "Threads": 138.0
+      },
+      "range": {
+        "MainPrivateMiB": [
+          104.711,
+          105.012
+        ],
+        "MainWorkingMiB": [
+          74.695,
+          75.027
+        ],
+        "MainPrivateWorkingMiB": [
+          26.156,
+          26.316
+        ],
+        "PluginPrivateMiB": [
+          12.094,
+          12.27
+        ],
+        "WebViewPrivateMiB": [
+          165.156,
+          165.816
+        ],
+        "Handles": [
+          925.0,
+          927.0
+        ],
+        "Threads": [
+          137.0,
+          138.0
+        ]
+      }
+    },
+    "low": {
+      "samples": 102,
+      "lastSecond": 598.07,
+      "median": {
+        "MainPrivateMiB": 91.506,
+        "MainWorkingMiB": 70.158,
+        "MainPrivateWorkingMiB": 26.576,
+        "PluginPrivateMiB": 11.969,
+        "WebViewPrivateMiB": 166.363,
+        "Handles": 919.0,
+        "Threads": 134.0
+      },
+      "range": {
+        "MainPrivateMiB": [
+          90.895,
+          92.43
+        ],
+        "MainWorkingMiB": [
+          69.27,
+          71.168
+        ],
+        "MainPrivateWorkingMiB": [
+          25.879,
+          27.414
+        ],
+        "PluginPrivateMiB": [
+          11.91,
+          13.379
+        ],
+        "WebViewPrivateMiB": [
+          0.0,
+          168.766
+        ],
+        "Handles": [
+          917.0,
+          927.0
+        ],
+        "Threads": [
+          133.0,
+          138.0
+        ]
+      }
+    }
+  },
+  "controlled_251_comparison": false,
+  "clean_machine_installation_tested": false,
+  "native_model_quality_matrix": [
+    {
+      "model": "standard",
+      "quality": "low",
+      "fps": 30,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "standard",
+      "quality": "medium",
+      "fps": 30,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "standard",
+      "quality": "high",
+      "fps": 60,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "keyboard",
+      "quality": "low",
+      "fps": 30,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "keyboard",
+      "quality": "medium",
+      "fps": 30,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "keyboard",
+      "quality": "high",
+      "fps": 60,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "gamepad",
+      "quality": "low",
+      "fps": 30,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "gamepad",
+      "quality": "medium",
+      "fps": 30,
+      "exit": 0,
+      "message": null
+    },
+    {
+      "model": "gamepad",
+      "quality": "high",
+      "fps": 60,
+      "exit": 0,
+      "message": null
+    }
+  ],
+  "core_tests_passed": 573,
+  "python_contracts": {
+    "passed": 35,
+    "failed": 1,
+    "reason": "pre-existing local SDK path differs from upstream Git revision contract"
+  }
+}

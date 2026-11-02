@@ -110,6 +110,22 @@ impl SettingsView {
                 return Err(format!("the plugin center is missing {key}"));
             }
         }
+        if std::env::var_os("BONGOCAT_COMPANION_SMOKE_REQUIRE_CARDS").is_some() {
+            let snapshot = self.plugin_host.snapshot();
+            if snapshot.cards.len() != 3
+                || [
+                    "com.bongocat.todo",
+                    "com.bongocat.mail",
+                    "com.bongocat.cyberwork",
+                ]
+                .iter()
+                .any(|id| !snapshot.cards.iter().any(|card| &card.id == id))
+            {
+                return Err(
+                    "companion distribution must display exactly Todo, Mail and Cyber Work".into(),
+                );
+            }
+        }
         if std::env::var_os("BONGOCAT_PLUGIN_SMOKE_REQUIRE_CARDS").is_some() {
             let cards = self.plugin_host.snapshot().cards;
             if cards.is_empty() {

@@ -468,6 +468,10 @@
           "minimum": 1,
           "type": "integer"
         },
+        "render_quality": {
+          "$ref": "#/$defs/RenderQuality",
+          "default": "low"
+        },
         "scale_percent": {
           "format": "uint16",
           "maximum": 400,
@@ -537,6 +541,14 @@
         "expressions",
         "motions",
         "motions_and_expressions"
+      ],
+      "type": "string"
+    },
+    "RenderQuality": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
       ],
       "type": "string"
     },

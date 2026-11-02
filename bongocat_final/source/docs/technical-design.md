@@ -25,6 +25,7 @@ Rust 2024 edition application
 - Windows 只发布 `x86_64-pc-windows-msvc`，不构建或发布 x86 与原生 ARM64；Windows on ARM 通过系统 x64 仿真运行该构建。
 - GPUI 只负责常规设置 UI，不承担模型渲染。
 - 模型窗口由 Rust 平台模块直接创建和管理，与 GPUI 设置窗口共享同一应用生命周期。
+- Windows 裁剪遮罩使用单通道 R8 UNORM 纹理保存覆盖率，保持八位精度及重叠遮罩的 alpha 混合规则；模型颜色和最终合成仍使用原有四通道格式（ADR-0101）。
 - Windows 模型窗口支持透明桌宠与普通窗口模式（ADR-0089）。普通窗口使用系统标题栏、等比例
   resize 边框、最小化/关闭按钮和不透明 D3D11 HWND swap chain，支持窗口捕获。背景为用户选择的
   RGB 纯色，默认绿色；模型自带背景和绘制层次保持不变。模式与背景通过既有 revision-checked
@@ -1930,3 +1931,5 @@ Windows has no notification with that reach — a switch inside the window the u
 is already in notifies neither a `WinEvent` foreground hook nor a background
 thread's Text Services sink — so Windows Input Source keeps reading on the host
 tick. Other plugins retain their existing cadence.
+
+Windows companion distributions use the build-pinned bundled catalog for both discovery and installation; retired stock plugin IDs do not register or execute. Render quality is a shared Low/Medium/High configuration value carried by overlay settings. Texture and mask dimensions use 50/75/100 percent, shared mask source sequences allocate one target, capture readback is temporary, and empty plugin HUDs do not retain a font compositor. See ADR-0102.

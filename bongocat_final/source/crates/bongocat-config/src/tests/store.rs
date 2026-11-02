@@ -463,3 +463,27 @@ fn interrupted_commit_crash_probe_child() {
         thread::sleep(Duration::from_secs(1));
     }
 }
+
+#[test]
+fn upgrade_selects_low_quality_once_and_preserves_later_choices() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = StorageLayout::under(dir.path(), BuildEnvironment::Production);
+    let store = ConfigStore::new(layout.clone()).unwrap();
+    store.load_or_default().unwrap();
+    let mut old = serde_json::to_value(NativeConfig::default()).unwrap();
+    old["overlay"]
+        .as_object_mut()
+        .unwrap()
+        .remove("render_quality");
+    old["overlay"]["maximum_fps"] = serde_json::json!(120);
+    fs::write(&layout.config, serde_json::to_vec(&old).unwrap()).unwrap();
+    let upgraded = store.load_or_default().unwrap();
+    assert_eq!(upgraded.config.overlay.render_quality, RenderQuality::Low);
+    assert_eq!(upgraded.config.overlay.maximum_fps, 30);
+    assert!(fs::read_dir(&layout.backups).unwrap().next().is_some());
+    let mut changed = upgraded.config;
+    changed.overlay.render_quality = RenderQuality::High;
+    changed.overlay.maximum_fps = 60;
+    store.commit(&changed).unwrap();
+    assert_eq!(store.load_or_default().unwrap().config, changed);
+}

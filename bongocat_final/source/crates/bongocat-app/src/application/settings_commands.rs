@@ -198,6 +198,7 @@ impl Application {
             ));
         }
         let mut next_config = self.config.clone();
+        next_config.overlay.render_quality = settings.render_quality;
         next_config.overlay.click_through = settings.click_through;
         next_config.overlay.window_mode = settings.window_mode;
         next_config.overlay.window_background_color = settings.window_background_color;

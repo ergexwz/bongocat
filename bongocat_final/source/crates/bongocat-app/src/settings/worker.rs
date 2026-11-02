@@ -358,6 +358,7 @@ pub(super) fn run_service(
                 reply,
             } => {
                 let runtime_settings = OverlaySettings {
+                    render_quality: settings.render_quality,
                     window_mode: settings.window_mode,
                     window_background_color: settings.window_background_color,
                     click_through: settings.click_through,

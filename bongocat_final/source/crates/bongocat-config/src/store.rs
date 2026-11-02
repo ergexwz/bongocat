@@ -207,12 +207,25 @@ impl ConfigStore {
         let interrupted_recovery = self.recover_interrupted_commit_unlocked()?;
         let mut outcome = match fs::read(&self.layout.config) {
             Ok(bytes) => match parse_config(&bytes) {
-                Ok((config, revision)) => Ok(ConfigLoadOutcome {
-                    config,
-                    revision,
-                    recovery: None,
-                    interrupted_recovery: None,
-                }),
+                Ok((mut config, mut revision)) => {
+                    let document: serde_json::Value = serde_json::from_slice(&bytes)?;
+                    if document
+                        .get("overlay")
+                        .and_then(|overlay| overlay.get("render_quality"))
+                        .is_none()
+                    {
+                        self.backup_current_unlocked(&bytes)?;
+                        config.overlay.render_quality = RenderQuality::Low;
+                        config.overlay.maximum_fps = 30;
+                        revision = self.commit_unlocked(&config)?;
+                    }
+                    Ok(ConfigLoadOutcome {
+                        config,
+                        revision,
+                        recovery: None,
+                        interrupted_recovery: None,
+                    })
+                }
                 Err(error @ ConfigError::UnsupportedSchema(_)) => Err(error),
                 Err(_) => self.recover_from_backup_unlocked(&bytes),
             },

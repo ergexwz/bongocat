@@ -1,0 +1,76 @@
+{
+  "plugins": [
+    {
+      "id": "com.bongocat.todo",
+      "name": "Todo",
+      "description": "A hand-drawn todo panel, quick add window and due-time bubbles beside your pet.",
+      "localizations": {
+        "zh-CN": {
+          "name": "待办",
+          "description": "桌宠旁边的待办面板、快速新建和到期气泡。"
+        }
+      },
+      "version": "0.1.0",
+      "app_versions": ">=2.5.0",
+      "protocol_version": 1,
+      "icon": {
+        "type": "local_image",
+        "value": "resources/icon.png"
+      },
+      "icon_url": "",
+      "downloads": {
+        "windows-x86_64": "com.bongocat.todo-0.1.0.zip"
+      },
+      "sha256": "0b0afb8afc33e335270dc61ad3f6a360eb5609161674301dfdc49ef6d237ca53",
+      "homepage": null
+    },
+    {
+      "id": "com.bongocat.mail",
+      "name": "Mail",
+      "description": "A hand-drawn IMAP mail notification center with accounts, archive and bubbles.",
+      "localizations": {
+        "zh-CN": {
+          "name": "邮件",
+          "description": "手绘风 IMAP 邮件通知中心，支持多账号、归档和桌宠气泡。"
+        }
+      },
+      "version": "0.1.1",
+      "app_versions": ">=2.5.0",
+      "protocol_version": 1,
+      "icon": {
+        "type": "local_image",
+        "value": "resources/icon.png"
+      },
+      "icon_url": "",
+      "downloads": {
+        "windows-x86_64": "com.bongocat.mail-0.1.1.zip"
+      },
+      "sha256": "a4fb4be6cfe3e78cdfca5da181b8ddea5b2d9d433424bd858e1ae5b1425d40a8",
+      "homepage": null
+    },
+    {
+      "id": "com.bongocat.cyberwork",
+      "name": "Cyber Work",
+      "description": "A hover-revealed key/mouse tap counter and gamepad time tracker above your pet, with scaling and usage history.",
+      "localizations": {
+        "zh-CN": {
+          "name": "赛博打工",
+          "description": "桌宠头顶的键鼠敲击计数器与 gamepad 游戏时长记录，支持缩放和使用历史。"
+        }
+      },
+      "version": "0.1.0",
+      "app_versions": ">=2.5.0",
+      "protocol_version": 1,
+      "icon": {
+        "type": "local_image",
+        "value": "resources/icon.png"
+      },
+      "icon_url": "",
+      "downloads": {
+        "windows-x86_64": "com.bongocat.cyberwork-0.1.0.zip"
+      },
+      "sha256": "5a870fa8223042a393d8a12d5710af6ea57e16388d4847f03126e27c01b6c3f3",
+      "homepage": null
+    }
+  ]
+}

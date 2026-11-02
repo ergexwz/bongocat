@@ -1,0 +1,87 @@
+{
+  "version": "2.5.1",
+  "installer": {
+    "file": "BongoCat_2.5.1_x64.exe",
+    "bytes": 239392473,
+    "sha256": "8422055e331557076ef420f271b1d2a9d0957c9d62677dfc47b4f7496ad1e393"
+  },
+  "runtime_sha256": {
+    "bongocat-app.exe": "6f86099bace3854e0c987c595b39ea14cc4b927e34ce1ce727ad8ef59569284d",
+    "bongocat-plugin-broker.exe": "6f86099bace3854e0c987c595b39ea14cc4b927e34ce1ce727ad8ef59569284d",
+    "vcruntime140.dll": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+    "vcruntime140_1.dll": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e"
+  },
+  "bundled_catalog_sha256": "e65088c8873aeb685d7ab30b642cc1111c94861795004b27a0395291cf0d7050",
+  "passed": {
+    "overlay": 113,
+    "platform": 70,
+    "packaging": 37,
+    "plugin_manager": 32,
+    "packaging_tools": 47,
+    "actual_payload_acceptance": 2
+  },
+  "limitations": [
+    "Unsigned local build",
+    "Clean Windows installation, upgrade and uninstall not tested",
+    "Interactive elevated-host linked-token launch not tested"
+  ],
+  "plugin_memory": {
+    "old": {
+      "plugins": {
+        "median_private_commit_MiB": 34.14,
+        "processes_observed": 3
+      },
+      "webview2": {
+        "median_private_commit_MiB": 995.08,
+        "processes_observed": 26
+      }
+    },
+    "new": {
+      "plugins": {
+        "median_private_commit_MiB": 8.48,
+        "processes_observed": 3
+      },
+      "webview2": {
+        "median_private_commit_MiB": 0.0,
+        "processes_observed": 0
+      }
+    }
+  },
+  "host_memory": {
+    "old": {
+      "private_commit_bytes": 392.41,
+      "private_working_set_bytes": 209.12,
+      "working_set_bytes": 273.06,
+      "gpu_dedicated_bytes": 159.85,
+      "gpu_shared_bytes": 5.77,
+      "samples_after_warmup": 18,
+      "observed_process_names": {
+        "bongocat-baseline.exe": 26,
+        "bongocat-cyberwork.exe": 8,
+        "msedgewebview2.exe": 53
+      }
+    },
+    "new": {
+      "private_commit_bytes": 326.13,
+      "private_working_set_bytes": 206.73,
+      "working_set_bytes": 268.85,
+      "gpu_dedicated_bytes": 69.14,
+      "gpu_shared_bytes": 4.77,
+      "samples_after_warmup": 17,
+      "observed_process_names": {
+        "bongocat-app.exe": 25,
+        "bongocat-cyberwork.exe": 25,
+        "msedgewebview2.exe": 170
+      }
+    }
+  },
+  "host_configuration_check": {
+    "exit_code": 0,
+    "config_before": "BBC190516ABA38D5DC034D06E107CF61F7D23733C717EA10BCFFC428431EB1E3",
+    "config_after": "BBC190516ABA38D5DC034D06E107CF61F7D23733C717EA10BCFFC428431EB1E3",
+    "config_unchanged": true
+  },
+  "host_run_exit_code": 0,
+  "settings_lifecycle_smoke_exit_code": 0,
+  "host_measurement_note": "45-second sequential runs, samples after second 15; main process excludes plugin/WebView2 counters; working sets are not private commit."
+}

@@ -2,6 +2,138 @@
 
 use super::*;
 
+/// Exercise the actual shaders and blend state on WARP, including faint edges,
+/// overlapping mask sources and full coverage. Compare the R8 coverage byte
+/// with the previous BGRA alpha byte rather than only checking descriptors.
+#[test]
+fn single_channel_masks_match_bgra_alpha_on_the_gpu() {
+    // SAFETY: the test owns all D3D resources on this thread. Upload buffers
+    // outlive synchronous creation, and mapped bytes are read before Unmap.
+    unsafe {
+        let (device, context) = try_create_d3d11_device(D3D_DRIVER_TYPE_WARP).unwrap();
+        let pipelines = create_pipelines(&device).unwrap();
+        let vertices = quad_vertices(ModelBounds {
+            min_x: -1.0,
+            min_y: -1.0,
+            max_x: 1.0,
+            max_y: 1.0,
+        });
+        let vertex =
+            Some(create_buffer(&device, &vertices, D3D11_BIND_VERTEX_BUFFER.0 as u32).unwrap());
+        let indices = create_buffer(
+            &device,
+            &[0_u16, 1, 2, 0, 2, 3],
+            D3D11_BIND_INDEX_BUFFER.0 as u32,
+        )
+        .unwrap();
+        let uniforms = Uniforms {
+            scale_offset: [1.0, 1.0, 0.0, 0.0],
+            multiply_color: [1.0; 4],
+            screen_color: [0.0; 4],
+            mask_settings: [0.0; 4],
+            corner_radius: [0.0; 4],
+            opacity: 1.0,
+            padding: [0.0; 3],
+        };
+        context.UpdateSubresource(
+            &pipelines.constant_buffer,
+            0,
+            None,
+            std::ptr::from_ref(&uniforms).cast(),
+            0,
+            0,
+        );
+        context.VSSetConstantBuffers(0, Some(&[Some(pipelines.constant_buffer.clone())]));
+        context.VSSetShader(&pipelines.vertex_shader, None);
+        context.PSSetShader(&pipelines.mask_shader, None);
+        context.PSSetSamplers(0, Some(&[Some(pipelines.sampler.clone())]));
+        context.IASetInputLayout(&pipelines.input_layout);
+        context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context.IASetVertexBuffers(
+            0,
+            1,
+            Some(&raw const vertex),
+            Some(&(size_of::<bongocat_render::Vertex>() as u32)),
+            Some(&0),
+        );
+        context.IASetIndexBuffer(&indices, DXGI_FORMAT_R16_UINT, 0);
+        context.RSSetState(&pipelines.rasterizer);
+        context.RSSetViewports(Some(&[D3D11_VIEWPORT {
+            Width: 8.0,
+            Height: 8.0,
+            MaxDepth: 1.0,
+            ..Default::default()
+        }]));
+        context.OMSetBlendState(&pipelines.mask_blend, None, u32::MAX);
+        for alpha in [0_u8, 1, 64, 128, 254, 255] {
+            let source = create_texture_resource(
+                &device,
+                1,
+                1,
+                MODEL_TEXTURE_FORMAT,
+                [0, 0, 0, alpha].as_ptr(),
+                4,
+            )
+            .unwrap();
+            context.PSSetShaderResources(0, Some(&[Some(source.shader_resource.clone()), None]));
+            let mut coverage = Vec::new();
+            for format in [MASK_TEXTURE_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM] {
+                let descriptor = D3D11_TEXTURE2D_DESC {
+                    Width: 8,
+                    Height: 8,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: format,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+                    ..Default::default()
+                };
+                let mut texture = None;
+                device
+                    .CreateTexture2D(&descriptor, None, Some(&mut texture))
+                    .unwrap();
+                let texture = texture.unwrap();
+                let target = create_render_target(&device, &texture, format).unwrap();
+                context.OMSetRenderTargets(
+                    Some(&[Some(target.clone())]),
+                    None::<&ID3D11DepthStencilView>,
+                );
+                context.ClearRenderTargetView(&target, &[0.0; 4]);
+                for _ in 0..3 {
+                    context.DrawIndexed(6, 0, 0);
+                }
+                context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>);
+                let staging = create_staging_texture(&device, &texture).unwrap();
+                context.CopyResource(&staging, &texture);
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                context
+                    .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                    .unwrap();
+                let offset = 3 * mapped.RowPitch as usize
+                    + if format == MASK_TEXTURE_FORMAT {
+                        2
+                    } else {
+                        2 * 4 + 3
+                    };
+                coverage.push(*mapped.pData.cast::<u8>().add(offset));
+                context.Unmap(&staging, 0);
+            }
+            assert_eq!(coverage[0], coverage[1], "source alpha {alpha}");
+            let a = f32::from(alpha) / 255.0;
+            let expected = ((1.0 - (1.0 - a).powi(3)) * 255.0).round() as u8;
+            assert!(
+                coverage[0].abs_diff(expected) <= 1,
+                "coverage {coverage:?}, expected {expected}"
+            );
+        }
+        context.ClearState();
+    }
+}
+
 #[test]
 fn gpu_structs_match_d3d11_layout() {
     assert_eq!(size_of::<bongocat_render::Vertex>(), 16);

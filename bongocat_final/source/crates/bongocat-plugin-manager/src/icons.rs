@@ -41,6 +41,23 @@ pub(crate) fn cache_remote_icon(
     Ok(path)
 }
 
+pub(crate) fn cache_local_icon(
+    plugin_dir: &Path,
+    plugin_id: &str,
+    version: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    if bytes.len() > catalog::MAX_ICON_BYTES {
+        return Err("plugin icon exceeds limit".into());
+    }
+    let path = cache_path(plugin_dir, plugin_id, version);
+    if !valid_cached_icon(&path) {
+        write_icon(&path, bytes)?;
+        prune_icon_cache(plugin_dir);
+    }
+    Ok(path)
+}
+
 fn cache_path(plugin_dir: &Path, plugin_id: &str, version: &str) -> PathBuf {
     let key = sha256_of(format!("{plugin_id}\0{version}").as_bytes());
     plugin_dir

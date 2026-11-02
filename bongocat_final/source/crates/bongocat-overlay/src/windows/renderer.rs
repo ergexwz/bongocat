@@ -63,7 +63,6 @@ impl Drop for ComApartment {
 /// and rebuild them from the resized chain.
 pub(crate) struct RenderTargets {
     pub(crate) render_target: ID3D11RenderTargetView,
-    pub(crate) staging_texture: ID3D11Texture2D,
     pub(crate) back_buffer: ID3D11Texture2D,
 }
 
@@ -91,6 +90,7 @@ pub(crate) struct Renderer {
     pub(crate) context: ID3D11DeviceContext,
     pub(crate) device: ID3D11Device,
     pub(crate) model_generation: u64,
+    quality_percent: u32,
     occluded: std::cell::Cell<bool>,
     pub(crate) resources: Arc<RenderResources>,
     pub(crate) model: GpuModel,
@@ -187,7 +187,6 @@ impl Renderer {
         let render_target = unsafe {
             create_render_target(&device, &back_buffer, COMPOSITION_RENDER_TARGET_FORMAT)?
         };
-        let staging_texture = unsafe { create_staging_texture(&device, &back_buffer)? };
         let pipelines = unsafe { create_pipelines(&device)? };
         let model = unsafe {
             GpuModel::prepare(
@@ -197,6 +196,7 @@ impl Renderer {
                 &frame.snapshot,
                 window.width,
                 window.height,
+                options.render_quality.percent(),
             )?
         };
         Ok(Self {
@@ -206,7 +206,6 @@ impl Renderer {
                 .then_some(options.window_background_color),
             targets: Some(RenderTargets {
                 render_target,
-                staging_texture,
                 back_buffer,
             }),
             swap_chain,
@@ -215,6 +214,7 @@ impl Renderer {
             context,
             device,
             model_generation: frame.model_generation,
+            quality_percent: options.render_quality.percent(),
             occluded: std::cell::Cell::new(false),
             resources: Arc::clone(&frame.resources),
             model,
@@ -314,16 +314,27 @@ impl Renderer {
         let render_target = unsafe {
             create_render_target(&self.device, &back_buffer, COMPOSITION_RENDER_TARGET_FORMAT)?
         };
-        let staging_texture = unsafe { create_staging_texture(&self.device, &back_buffer)? };
         self.targets = Some(RenderTargets {
             render_target,
-            staging_texture,
             back_buffer,
         });
+        let mut masks = BTreeMap::new();
         for mesh in &mut self.model.meshes {
             if mesh.mask_target.is_some() {
-                mesh.mask_target =
-                    Some(unsafe { create_mask_target(&self.device, width, height)? });
+                let target = if let Some(target) = masks.get(&mesh.masks) {
+                    MaskTarget::clone(target)
+                } else {
+                    let target = unsafe {
+                        create_mask_target(
+                            &self.device,
+                            (width * self.quality_percent / 100).max(1),
+                            (height * self.quality_percent / 100).max(1),
+                        )?
+                    };
+                    masks.insert(mesh.masks.clone(), target.clone());
+                    target
+                };
+                mesh.mask_target = Some(target);
             }
         }
         self.width = width;
@@ -347,6 +358,7 @@ impl Renderer {
                     &frame.snapshot,
                     self.width,
                     self.height,
+                    self.quality_percent,
                 )
             }
             .map_err(windows_error("prepare D3D11 model resources"))?;
@@ -466,7 +478,20 @@ impl Renderer {
             self.height as f32,
             self.model.mirror_horizontal,
         );
+        let mut drawn_masks = std::collections::BTreeSet::new();
+        let mask_viewport = D3D11_VIEWPORT {
+            Width: (self.width * self.quality_percent / 100).max(1) as f32,
+            Height: (self.height * self.quality_percent / 100).max(1) as f32,
+            ..viewport
+        };
+        // SAFETY: the immediate context is confined to the renderer owner thread.
+        unsafe {
+            self.context.RSSetViewports(Some(&[mask_viewport]));
+        }
         for mesh in &self.model.meshes {
+            if !drawn_masks.insert(mesh.masks.clone()) {
+                continue;
+            }
             let Some(mask_target) = &mesh.mask_target else {
                 continue;
             };
@@ -502,6 +527,10 @@ impl Renderer {
                     self.bind_mesh(source, &uniforms, &self.model.empty_mask.shader_resource)?
                 };
             }
+        }
+        // SAFETY: restore the composition viewport after rendering reduced masks.
+        unsafe {
+            self.context.RSSetViewports(Some(&[viewport]));
         }
         let targets = self
             .targets
@@ -711,14 +740,19 @@ impl Renderer {
                 self.context.DrawIndexed(6, 0, 0);
             }
         }
-        if verify || capture {
+        let staging_texture = if verify || capture {
+            Some(unsafe { create_staging_texture(&self.device, &targets.back_buffer)? })
+        } else {
+            None
+        };
+        if let Some(staging_texture) = &staging_texture {
             unsafe {
                 self.context
-                    .CopyResource(&targets.staging_texture, &targets.back_buffer);
+                    .CopyResource(staging_texture, &targets.back_buffer);
                 if verify {
                     verify_frame_smoke(
                         &self.context,
-                        &targets.staging_texture,
+                        staging_texture,
                         self.width,
                         self.height,
                         self.window_background_color,
@@ -731,7 +765,9 @@ impl Renderer {
             let captured = unsafe {
                 read_staging_frame(
                     &self.context,
-                    &targets.staging_texture,
+                    staging_texture
+                        .as_ref()
+                        .ok_or_else(|| invariant_error("capture surface unavailable"))?,
                     self.width,
                     self.height,
                 )

@@ -39,7 +39,7 @@ pub use model::{
 };
 pub use overlay::{
     DEFAULT_HIDE_ON_IDLE_DELAY_SECONDS, MAXIMUM_HIDE_ON_IDLE_DELAY_SECONDS,
-    MAXIMUM_HIDE_ON_POINTER_HOVER_DELAY_SECONDS, OverlayConfig,
+    MAXIMUM_HIDE_ON_POINTER_HOVER_DELAY_SECONDS, OverlayConfig, RenderQuality,
 };
 pub use system::SystemConfig;
 pub use updates::UpdateConfig;
@@ -72,6 +72,7 @@ impl Default for NativeConfig {
                 language: Language::default(),
             },
             overlay: OverlayConfig {
+                render_quality: RenderQuality::Low,
                 visible: true,
                 window_mode: false,
                 window_background_color: overlay::default_window_background_color(),
@@ -80,7 +81,7 @@ impl Default for NativeConfig {
                 always_on_top: true,
                 scale_percent: 100,
                 opacity_percent: 100,
-                maximum_fps: 60,
+                maximum_fps: 30,
                 corner_radius_percent: 0,
                 hide_on_pointer_hover: false,
                 hide_on_pointer_hover_delay_seconds: 0,

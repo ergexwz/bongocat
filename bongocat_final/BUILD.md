@@ -1,5 +1,22 @@
 # 从源码构建
 
+## 2.5.1 完整交付
+
+使用 `source/justfile` 的 `just build --bundle-local-plugins --formats nsis`，
+由 `bongocat-packaging` 统一校验插件目录、离线运行库并生成安装包。
+若环境没有 `just`，可执行该 recipe 的原始命令：
+`cargo run --locked -p bongocat-packaging -- --bundle-local-plugins --formats nsis`。
+插件源码构建与安装包内的插件二进制应一致。
+
+仅替换主 exe 不是完整交付：同步 `target/release/bongocat-app.exe` 与
+`target/release/bongocat-plugin-broker.exe`，以及同一安装包的
+`resources/bundled-plugins`、`resources/dependencies` 和 VC++ DLL。
+不得混用不同构建的主程序与插件目录（主程序校验目录摘要）。
+模型资源从安装包或已经验证的运行目录取得，保留用户自定义资产。
+版本号由 `source/Cargo.toml` 的 workspace version 决定。
+
+以下单独编译步骤供开发使用，不能代替完整安装包构建。
+
 ## 前置条件
 
 - Windows 10 1903+ / Windows 11 x64
@@ -71,7 +88,7 @@ cargo fmt --all -- --check
 
 ## 补丁
 
-源码修改已经包含在 `source/` 中，workspace 版本为 **2.5.0**；2.4.1 时期相对
+源码修改已经包含在 `source/` 中，workspace 版本为 **2.5.1**；2.4.1 时期相对
 upstream v2.4.0 的 Xbox/XInput 补丁保留在：
 
 ```text
@@ -113,3 +130,7 @@ vcruntime140_1.dll
 它们是 Microsoft Visual C++ Redistributable 的一部分，从本机 VS Build Tools 的 `VC\Redist\MSVC\...\x64\Microsoft.VC145.CRT` 复制。若在其他机器上重新构建，构建机需要相同/兼容的 MSVC 运行库；分发包保留这两个 DLL 即可不依赖系统预装 VC++。
 
 Windows 10 1903+ 自带的 `icuuc.dll`、`d3dcompiler_47.dll` 等系统 DLL 不随包分发。
+
+## 2.5.2 本地交付
+
+生产安装包位于外层 `version/BongoCat_2.5.2/`，直接运行目录的主程序与 broker 已同步为安装包内的 Production 字节。`source/target/release` 最后用于构建支持隔离配置的 Development Release 性能测试程序，不应将其覆盖到交付目录。测试与性能记录见 `source/docs/benchmark/bongocat-2.5.2-2026-11-02.md`。

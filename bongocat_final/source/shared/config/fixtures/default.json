@@ -27,7 +27,8 @@
     "hide_on_idle": false,
     "hide_on_idle_delay_seconds": 10,
     "keep_inside_screen": true,
-    "maximum_fps": 60
+    "maximum_fps": 30,
+    "render_quality": "low"
   },
   "input": {
     "gamepad": {

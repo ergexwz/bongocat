@@ -13,6 +13,34 @@ fn installed_bundle() -> (tempfile::TempDir, PluginManager) {
         bundled_directory: Some(bundle),
         bundled_catalog_sha256: Some(digest),
     };
+    let offers = source
+        .discover(env!("CARGO_PKG_VERSION"), &AtomicBool::new(false))
+        .unwrap();
+    let ids: std::collections::BTreeSet<_> = offers
+        .iter()
+        .map(|offer| offer.metadata.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "com.bongocat.todo",
+            "com.bongocat.mail",
+            "com.bongocat.cyberwork"
+        ]
+        .into_iter()
+        .collect()
+    );
+    let icon_cache = tempfile::tempdir().unwrap();
+    for mut offer in offers {
+        offer
+            .cache_icon(icon_cache.path(), &AtomicBool::new(false))
+            .unwrap();
+        assert!(
+            std::path::Path::new(&offer.icon_url).is_file(),
+            "missing bundled icon for {}",
+            offer.metadata.id
+        );
+    }
     let directory = tempfile::tempdir().expect("isolated plugin data");
     let mut manager = PluginManager::new(directory.path().to_path_buf()).unwrap();
     source
@@ -39,7 +67,13 @@ fn packaged_companions_install_disabled_and_run_from_extracted_packages() {
     for (plugin, _) in &installed {
         manager.enable_plugin(&plugin.id).unwrap();
     }
-    for elapsed in (0..=3000).step_by(100) {
+    // The same real-process test can be sampled for resources without adding
+    // production-only switches or touching the user's installed plugin data.
+    let seconds: u64 = std::env::var("BONGOCAT_TEST_SOAK_SECONDS")
+        .map(|value| value.parse().expect("whole soak seconds"))
+        .unwrap_or(3);
+    assert!((1..=600).contains(&seconds));
+    for elapsed in (0..=seconds * 1000).step_by(100) {
         manager.tick(elapsed);
         assert!(
             manager
@@ -159,4 +193,16 @@ fn packaged_ordinary_broker_forwards_each_companions_protocol() {
         }
         reader.join().unwrap();
     }
+}
+
+#[test]
+#[ignore = "requires isolated copied plugin store"]
+fn copied_user_store_starts_cyberwork() {
+    let root = PathBuf::from(std::env::var_os("BONGOCAT_TEST_COPIED_STORE").unwrap());
+    let mut manager = PluginManager::new(root).unwrap();
+    manager.discover_plugins().unwrap();
+    manager
+        .enable_plugin("com.bongocat.cyberwork")
+        .expect("start copied cyberwork");
+    manager.shutdown().unwrap();
 }

@@ -16,6 +16,8 @@ use super::*;
 #[cfg_attr(any(test, feature = "schema-generation"), derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct OverlayConfig {
+    #[serde(default)]
+    pub render_quality: RenderQuality,
     /// The user's explicit visibility preference, independent of temporary
     /// hover/idle hiding or another application's window covering the pet.
     #[serde(default = "default_visible")]
@@ -170,4 +172,23 @@ pub const DEFAULT_HIDE_ON_IDLE_DELAY_SECONDS: u32 = 10;
 
 fn default_hide_on_idle_delay_seconds() -> u32 {
     DEFAULT_HIDE_ON_IDLE_DELAY_SECONDS
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "schema-generation"), derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum RenderQuality {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+impl RenderQuality {
+    pub const fn percent(self) -> u32 {
+        match self {
+            Self::Low => 50,
+            Self::Medium => 75,
+            Self::High => 100,
+        }
+    }
 }

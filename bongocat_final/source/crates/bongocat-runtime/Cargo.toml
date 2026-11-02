@@ -8,6 +8,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+bongocat-config.workspace = true
 bongocat-audio.workspace = true
 bongocat-input.workspace = true
 bongocat-live2d-playback.workspace = true

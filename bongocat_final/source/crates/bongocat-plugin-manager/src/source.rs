@@ -5,6 +5,7 @@ use cargo_packager_updater::semver::{Version, VersionReq};
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -59,6 +60,30 @@ impl AvailablePlugin {
     /// left untouched. Production performs this off the service's UI-facing
     /// loop; a failure keeps the remote URL so the card can still try it.
     pub fn cache_icon(&mut self, plugin_dir: &Path, stop: &AtomicBool) -> Result<(), String> {
+        if let PackageLocation::Local(_) = &self.location {
+            let bongocat_plugin_sdk::PluginIcon::LocalImage(path) = &self.metadata.icon else {
+                return Ok(());
+            };
+            let bytes = self.read(stop)?;
+            let mut archive =
+                zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+            let icon = archive.by_name(path).map_err(|e| e.to_string())?;
+            if icon.size() > catalog::MAX_ICON_BYTES as u64 {
+                return Err("plugin icon exceeds limit".into());
+            }
+            let mut icon_bytes = Vec::new();
+            std::io::Read::take(icon, catalog::MAX_ICON_BYTES as u64 + 1)
+                .read_to_end(&mut icon_bytes)
+                .map_err(|e| e.to_string())?;
+            let cached = crate::icons::cache_local_icon(
+                plugin_dir,
+                &self.metadata.id,
+                &self.metadata.version,
+                &icon_bytes,
+            )?;
+            self.icon_url = cached.to_string_lossy().into_owned();
+            return Ok(());
+        }
         if !self.icon_url.starts_with("https://") {
             return Ok(());
         }
@@ -156,6 +181,22 @@ impl PluginSource {
     }
 
     pub fn discover(&self, app: &str, stop: &AtomicBool) -> Result<Vec<AvailablePlugin>, String> {
+        if let Self::Production {
+            bundled_directory: Some(directory),
+            bundled_catalog_sha256: Some(pin),
+            public_key,
+            platform,
+            ..
+        } = self
+        {
+            return verified_bundled_plugins_with_pin(
+                directory,
+                public_key,
+                platform,
+                app,
+                Some(pin),
+            );
+        }
         let mut candidates = Vec::new();
         match self {
             Self::InstalledOnly => {}
@@ -520,6 +561,22 @@ mod tests {
             )
         };
         assert_eq!(verify().unwrap().len(), 1);
+        let source = PluginSource::Production {
+            owner: "offline.invalid".into(),
+            repository: "unused".into(),
+            public_key: String::new(),
+            platform: "windows-x86_64".into(),
+            bundled_directory: Some(directory.path().to_path_buf()),
+            bundled_catalog_sha256: Some(pin.clone()),
+        };
+        assert_eq!(
+            source
+                .discover("2.5.0", &AtomicBool::new(false))
+                .unwrap()
+                .len(),
+            1
+        );
+
         let mut changed = bytes.clone();
         changed.push(b' ');
         fs::write(&path, changed).unwrap();

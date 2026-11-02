@@ -28,6 +28,7 @@ pub(crate) fn model_switch_window_bounds(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OverlaySessionOptions {
+    pub render_quality: bongocat_runtime::RenderQuality,
     pub window_mode: bool,
     pub window_background_color: [u8; 3],
     pub click_through: bool,
@@ -87,6 +88,7 @@ pub struct OverlaySessionOptions {
 impl OverlaySessionOptions {
     pub const fn with_runtime_settings(self, settings: OverlaySettings) -> Self {
         Self {
+            render_quality: settings.render_quality,
             window_mode: settings.window_mode,
             window_background_color: settings.window_background_color,
             click_through: settings.click_through,
@@ -138,6 +140,7 @@ impl OverlaySessionOptions {
         #[cfg(target_os = "windows")]
         {
             self.window_mode != next.window_mode
+                || self.render_quality.percent() != next.render_quality.percent()
         }
         #[cfg(target_os = "macos")]
         {
@@ -150,6 +153,7 @@ impl OverlaySessionOptions {
 impl Default for OverlaySessionOptions {
     fn default() -> Self {
         Self {
+            render_quality: Default::default(),
             window_mode: false,
             window_background_color: [0, 255, 0],
             click_through: false,

@@ -216,6 +216,7 @@ impl Default for SettingsGamepadAxisSettings {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SettingsOverlay {
+    pub render_quality: bongocat_config::RenderQuality,
     pub window_mode: bool,
     pub window_background_color: [u8; 3],
     pub click_through: bool,
@@ -251,6 +252,7 @@ pub struct SettingsOverlay {
 impl Default for SettingsOverlay {
     fn default() -> Self {
         Self {
+            render_quality: Default::default(),
             window_mode: false,
             window_background_color: [0, 255, 0],
             click_through: false,

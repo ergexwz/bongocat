@@ -8,6 +8,7 @@
 use super::*;
 use std::collections::BTreeSet;
 
+#[derive(Clone)]
 pub(crate) struct MaskTarget {
     pub(crate) _texture: ID3D11Texture2D,
     pub(crate) render_target: ID3D11RenderTargetView,
@@ -154,6 +155,7 @@ impl GpuModel {
         snapshot: &RenderSnapshot,
         width: u32,
         height: u32,
+        quality_percent: u32,
     ) -> WindowsResult<Self> {
         validate_render_snapshot(resources, snapshot)
             .map_err(|error| invariant_error(error.message()))?;
@@ -161,7 +163,8 @@ impl GpuModel {
             .textures
             .iter()
             .map(|asset| {
-                unsafe { load_texture(device, context, asset) }.map(|texture| (asset.id, texture))
+                unsafe { load_texture_scaled(device, context, asset, quality_percent) }
+                    .map(|texture| (asset.id, texture))
             })
             .collect::<WindowsResult<BTreeMap<_, _>>>()?;
         let mut key_textures = BTreeMap::new();
@@ -179,15 +182,16 @@ impl GpuModel {
             let mut image =
                 image::imageops::crop(&mut image, crop.0, crop.1, crop.2, crop.3).to_image();
             premultiply_alpha(&mut image);
+            let image = scaled_texture(image, quality_percent);
             let texture = unsafe {
                 create_mipmapped_texture_resource(
                     device,
                     context,
-                    crop.2,
-                    crop.3,
+                    image.width(),
+                    image.height(),
                     MODEL_TEXTURE_FORMAT,
                     image.as_ptr(),
-                    crop.2 * 4,
+                    image.width() * 4,
                 )
             }?;
             key_textures.insert(asset.id, texture);
@@ -215,6 +219,7 @@ impl GpuModel {
         let background_vertices = quad_vertices(canvas_bounds);
         let background_indices = [0_u16, 1, 2, 0, 2, 3];
         let mut meshes = Vec::with_capacity(snapshot.drawables.len());
+        let mut mask_targets = BTreeMap::new();
         for drawable in &snapshot.drawables {
             // D3D11 rejects a zero-byte buffer, and a drawable the Core reports
             // without triangles has nothing to upload. Both arrays therefore
@@ -263,7 +268,19 @@ impl GpuModel {
                 mask_target: if drawable.masks.is_empty() {
                     None
                 } else {
-                    Some(unsafe { create_mask_target(device, width, height)? })
+                    Some(if let Some(target) = mask_targets.get(&drawable.masks) {
+                        MaskTarget::clone(target)
+                    } else {
+                        let target = unsafe {
+                            create_mask_target(
+                                device,
+                                (width * quality_percent / 100).max(1),
+                                (height * quality_percent / 100).max(1),
+                            )?
+                        };
+                        mask_targets.insert(drawable.masks.clone(), target.clone());
+                        target
+                    })
                 },
             });
         }
@@ -329,7 +346,7 @@ impl GpuModel {
             {
                 return Err(invariant_error("drawable triangle indices changed"));
             }
-            if mesh.mask_target.is_some() != !drawable.masks.is_empty() {
+            if mesh.masks != drawable.masks {
                 return Err(invariant_error("drawable clipping topology changed"));
             }
             if drawable.dynamic_flags.vertex_positions_changed && !drawable.vertices.is_empty() {
@@ -396,17 +413,27 @@ pub(crate) unsafe fn load_texture(
     context: &ID3D11DeviceContext,
     asset: &TextureAsset,
 ) -> WindowsResult<TextureResource> {
+    unsafe { load_texture_scaled(device, context, asset, 100) }
+}
+
+unsafe fn load_texture_scaled(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    asset: &TextureAsset,
+    percent: u32,
+) -> WindowsResult<TextureResource> {
     let mut image = decode_texture(&asset.path, asset.width, asset.height)?;
     premultiply_alpha(&mut image);
+    let image = scaled_texture(image, percent);
     unsafe {
         create_mipmapped_texture_resource(
             device,
             context,
-            asset.width,
-            asset.height,
+            image.width(),
+            image.height(),
             MODEL_TEXTURE_FORMAT,
             image.as_ptr(),
-            asset.width.saturating_mul(4),
+            image.width().saturating_mul(4),
         )
     }
 }
@@ -526,8 +553,8 @@ pub(crate) unsafe fn create_mipmapped_texture_resource(
 }
 
 pub(crate) unsafe fn create_empty_mask(device: &ID3D11Device) -> WindowsResult<TextureResource> {
-    let pixel = [0_u8; 4];
-    unsafe { create_texture_resource(device, 1, 1, MASK_TEXTURE_FORMAT, pixel.as_ptr(), 4) }
+    let pixel = [0_u8];
+    unsafe { create_texture_resource(device, 1, 1, MASK_TEXTURE_FORMAT, pixel.as_ptr(), 1) }
 }
 
 pub(crate) unsafe fn create_texture_resource(
@@ -734,4 +761,16 @@ pub(crate) unsafe fn verify_frame_smoke(
     };
     unsafe { context.Unmap(texture, 0) };
     result.map(|_| ())
+}
+
+fn scaled_texture(image: image::RgbaImage, percent: u32) -> image::RgbaImage {
+    if percent == 100 {
+        return image;
+    }
+    image::imageops::resize(
+        &image,
+        (image.width() * percent / 100).max(1),
+        (image.height() * percent / 100).max(1),
+        image::imageops::FilterType::Triangle,
+    )
 }

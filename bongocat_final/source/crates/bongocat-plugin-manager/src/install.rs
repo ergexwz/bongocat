@@ -833,4 +833,33 @@ mod tests {
         assert_eq!(manager.discover_plugins().unwrap(), 0);
         assert!(manager.list_plugins().is_empty());
     }
+    #[test]
+    fn retired_distribution_packages_keep_their_files_without_registration() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = crate::PluginManager::new(directory.path().to_path_buf()).unwrap();
+        for id in [
+            "com.bongocat.pomodoro",
+            "com.bongocat.input-source",
+            "com.bongocat.key-sounds",
+        ] {
+            let bytes = package(id, "1.0.0");
+            manager
+                .install_verified(&bytes, &crate::sha256_of(&bytes))
+                .unwrap();
+        }
+        drop(manager);
+        let mut manager = crate::PluginManager::new(directory.path().to_path_buf()).unwrap();
+        manager.retire_legacy_plugins();
+        assert_eq!(manager.discover_plugins().unwrap(), 0);
+        assert!(manager.list_plugins().is_empty());
+        for id in [
+            "com.bongocat.pomodoro",
+            "com.bongocat.input-source",
+            "com.bongocat.key-sounds",
+        ] {
+            assert!(selected_root(directory.path(), id).is_some());
+            let bytes = package(id, "2.0.0");
+            assert!(manager.install_local(&bytes).is_err());
+        }
+    }
 }

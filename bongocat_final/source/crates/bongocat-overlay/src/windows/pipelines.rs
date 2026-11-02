@@ -19,7 +19,9 @@ pub(crate) const COMPOSITION_RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G
 
 pub(crate) const MODEL_TEXTURE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 
-pub(crate) const MASK_TEXTURE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
+// Coverage has one eight-bit component. R8 preserves the old alpha precision
+// while using one quarter of the unaligned storage of a BGRA mask surface.
+pub(crate) const MASK_TEXTURE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
 
 pub(crate) const SHADER_SOURCE: &str = r#"
     cbuffer UniformBuffer : register(b0) {
@@ -95,7 +97,7 @@ pub(crate) const SHADER_SOURCE: &str = r#"
         float mask = 1.0;
         if (mask_settings.z > 0.5) {
             float2 mask_uv = input.position.xy / mask_settings.xy;
-            mask = mask_texture.Sample(texture_sampler, mask_uv).a;
+            mask = mask_texture.Sample(texture_sampler, mask_uv).r;
             if (mask_settings.w > 0.5) {
                 mask = 1.0 - mask;
             }
@@ -106,7 +108,9 @@ pub(crate) const SHADER_SOURCE: &str = r#"
 
     float4 cubism_mask_fragment(RasterVertex input) : SV_TARGET {
         float alpha = model_texture.Sample(texture_sampler, input.uv).a;
-        return float4(0.0, 0.0, 0.0, alpha);
+        // Red stores coverage; alpha still supplies INV_SRC_ALPHA to blending,
+        // so overlapping masks retain a + b * (1 - a) coverage accumulation.
+        return float4(alpha, 0.0, 0.0, alpha);
     }
 
     // The plugin layer is one quad in the window's own pixel space rather than in

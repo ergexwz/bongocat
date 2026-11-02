@@ -584,6 +584,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let permission_check_enabled = !run_options.automated_verification();
 
     let overlay_options = OverlaySessionOptions {
+        render_quality: application.config().overlay.render_quality,
         window_mode: application.config().overlay.window_mode,
         window_background_color: application.config().overlay.window_background_color,
         click_through: application.config().overlay.click_through,

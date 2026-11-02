@@ -511,6 +511,7 @@ fn service_orders_updates_persists_them_and_stops_runtime() {
         })
     );
     let overlay_settings = SettingsOverlay {
+        render_quality: bongocat_config::RenderQuality::High,
         window_mode: true,
         window_background_color: [12, 34, 56],
         click_through: true,
@@ -670,6 +671,7 @@ fn service_rejects_stale_overlay_settings_without_mutating_runtime_or_config() {
     let initial = client.read_snapshot_blocking().expect("initial snapshot");
     let initial_config_revision = initial.config_revision.expect("config revision");
     let original_settings = SettingsOverlay {
+        render_quality: bongocat_config::RenderQuality::High,
         window_mode: false,
         window_background_color: [0, 255, 0],
         click_through: false,
@@ -690,6 +692,7 @@ fn service_rejects_stale_overlay_settings_without_mutating_runtime_or_config() {
     let committed_config = std::fs::read(&config_path).expect("committed config");
 
     let stale_settings = SettingsOverlay {
+        render_quality: bongocat_config::RenderQuality::High,
         window_mode: true,
         window_background_color: [255, 0, 255],
         click_through: true,

@@ -732,36 +732,96 @@ impl Render for SettingsView {
                         "settings.overlay.performance.title",
                     ))
                     .items(with_search_keywords(
-                        vec![SettingItem::new(
-                            bongocat_i18n::text(
-                                language.catalog_locale(),
-                                "settings.overlay.maximum_fps.label",
-                            ),
-                            SettingField::number_input(
-                                NumberFieldOptions {
-                                    min: 15.0,
-                                    max: 240.0,
-                                    step: 15.0,
-                                },
-                                {
+                        vec![
+                            SettingItem::new(
+                                bongocat_i18n::text(
+                                    language.catalog_locale(),
+                                    "settings.overlay.quality.label",
+                                ),
+                                SettingField::element({
                                     let view = view_entity.clone();
-                                    move |app| {
-                                        view.read(app)
-                                            .snapshot
-                                            .as_ref()
-                                            .map_or(60.0, |s| f64::from(s.maximum_fps))
+                                    move |options: &RenderOptions, _: &mut Window, cx: &mut App| {
+                                        let mut row = div().flex().gap_2();
+                                        for (quality, label) in [
+                                            (
+                                                bongocat_ui_protocol::RenderQuality::Low,
+                                                "settings.overlay.quality.low",
+                                            ),
+                                            (
+                                                bongocat_ui_protocol::RenderQuality::Medium,
+                                                "settings.overlay.quality.medium",
+                                            ),
+                                            (
+                                                bongocat_ui_protocol::RenderQuality::High,
+                                                "settings.overlay.quality.high",
+                                            ),
+                                        ] {
+                                            let selected =
+                                                view.read(cx).snapshot.as_ref().is_some_and(|s| {
+                                                    s.overlay.render_quality == quality
+                                                });
+                                            let target = view.clone();
+                                            row = row.child(
+                                                Button::new(label)
+                                                    .label(bongocat_i18n::text(
+                                                        language.catalog_locale(),
+                                                        label,
+                                                    ))
+                                                    .when(selected, |button| button.primary())
+                                                    .disabled(options.is_disabled())
+                                                    .on_click(move |_, _, cx| {
+                                                        target.update(cx, |view, cx| {
+                                                            if let Some(snapshot) = &view.snapshot {
+                                                                let mut settings = snapshot.overlay;
+                                                                settings.render_quality = quality;
+                                                                view.set_overlay_settings(
+                                                                    settings, cx,
+                                                                );
+                                                            }
+                                                        });
+                                                    }),
+                                            );
+                                        }
+                                        row.into_any_element()
                                     }
-                                },
-                                {
-                                    let view = view_entity.clone();
-                                    move |value, app| {
-                                        view.update(app, |view, cx| {
-                                            view.set_maximum_fps_value(value, cx)
-                                        });
-                                    }
-                                },
+                                }),
                             ),
-                        )],
+                            SettingItem::new(
+                                bongocat_i18n::text(
+                                    language.catalog_locale(),
+                                    "settings.overlay.maximum_fps.label",
+                                ),
+                                SettingField::element({
+                                    let view = view_entity.clone();
+                                    move |options: &RenderOptions, _: &mut Window, cx: &mut App| {
+                                        let mut row = div().flex().gap_2();
+                                        for (fps, label) in [(30, "30 FPS"), (60, "60 FPS")] {
+                                            let selected = view
+                                                .read(cx)
+                                                .snapshot
+                                                .as_ref()
+                                                .is_some_and(|s| s.maximum_fps == fps);
+                                            let target = view.clone();
+                                            row = row.child(
+                                                Button::new(label)
+                                                    .label(label)
+                                                    .when(selected, |button| button.primary())
+                                                    .disabled(options.is_disabled())
+                                                    .on_click(move |_, _, cx| {
+                                                        target.update(cx, |view, cx| {
+                                                            view.set_maximum_fps_value(
+                                                                f64::from(fps),
+                                                                cx,
+                                                            )
+                                                        });
+                                                    }),
+                                            );
+                                        }
+                                        row.into_any_element()
+                                    }
+                                }),
+                            ),
+                        ],
                         &model_window_performance_keywords,
                     )),
             ]);

@@ -40,6 +40,7 @@ fn application_loads_config_updates_runtime_and_stops() {
     );
 
     let overlay_settings = OverlaySettings {
+        render_quality: bongocat_config::RenderQuality::High,
         window_mode: true,
         window_background_color: [12, 34, 56],
         click_through: true,
