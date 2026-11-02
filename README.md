@@ -1,15 +1,24 @@
 ## BongoCat 项目优化
 
-程序原先有点小问题，不能正确的反应xbox手柄，现在做了个人修改来优化体验。
+程序原先有点小问题，不能正确的反应xbox手柄，现在做了个人修改来优化体验，并新增插件。
 
 目前有三个插件：(1) todo清单、(2) 邮件整理、(3) 点击计数
 
 原项目链接：https://github.com/ayangweb/BongoCat
+
 参考项目：https://github.com/ChHsiching/bongocat-todo
 
-**2.5.2 安装版**：运行 `version/BongoCat_2.5.2/BongoCat_2.5.2_x64.exe`。安装包包含主程序、三个插件、独立插件启动组件和离线运行库。先从托盘退出旧版再安装；首次安装的插件默认关闭，在设置 → 插件中心按需启用。旧版目录保留。
+**2.5.2 安装教程**：右侧release选择2.5.2安装包下载安装。
 
-**直接运行**：`bongocat_final/run.bat` 的运行目录在本次交付后同步到 2.5.2。请保留整个目录，不能只复制主 exe；管理员模式启动插件时还需要同目录的 `bongocat-plugin-broker.exe`。
+安装包包含主程序、三个插件、独立插件启动组件和离线运行库。首次安装的插件默认关闭，在设置 → 插件中心按需启用。
+
+## 开发者说明
+
+# 优化内容
+
+**使用优化**：设置中的画质支持低、中、高，帧率支持30/60；首次升级默认低画质30帧，并备份原配置。
+
+**直接运行**：`bongocat_final/run.bat` 的运行目录在本次交付后同步到 2.5.2。请保留整个目录，不能只保留主 exe；管理员模式启动插件时还需要同目录的 `bongocat-plugin-broker.exe`。
 
 **伴随插件**：`bongocat_plugins/dist/` 已提供待办、邮件与“赛博打工”三个独立插件 ZIP；在
 插件中心“从文件安装”选择即可。源码与重新打包方法详见 `bongocat_plugins/README.md`。
@@ -20,8 +29,6 @@ gamepad 模式下统计游戏时长；右键桌宠 → 插件 → 计数器缩�
 **开机自启动**：登录任务会记录当前 `BongoCat.exe` 的实际位置；移动程序文件夹后，
 正常启动会尝试把任务更新到新位置。若设置页提示“应用位置已变化”，
 重新开关一次即可修复。
-
-## 开发者说明
 
 做了两个地方：
 
@@ -56,4 +63,4 @@ The full modified source is in `bongocat_final/source/`; the local patch is
 Do not run multiple BongoCat builds at the same time: they share the
 single-instance identity and `%APPDATA%\com.ayangweb.bongo-cat` configuration.
 
-2.5.2 将插件中心切换为随包的待办、邮件和赛博打工，旧番茄钟、输入法状态、按键音效的文件与数据保留但不再运行。设置中的画质支持低、中、高，帧率支持30/60；首次升级默认低画质30帧，并备份原配置。
+
