@@ -5,6 +5,7 @@
 目前有三个插件：(1) todo清单、(2) 邮件整理、(3) 点击计数
 
 原项目链接：https://github.com/ayangweb/BongoCat
+参考项目：https://github.com/ChHsiching/bongocat-todo
 
 **2.5.2 安装版**：运行 `version/BongoCat_2.5.2/BongoCat_2.5.2_x64.exe`。安装包包含主程序、三个插件、独立插件启动组件和离线运行库。先从托盘退出旧版再安装；首次安装的插件默认关闭，在设置 → 插件中心按需启用。旧版目录保留。
 
