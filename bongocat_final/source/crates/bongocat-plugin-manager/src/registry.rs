@@ -153,6 +153,10 @@ impl PluginRegistry {
             .get(id)
             .is_some_and(|entry| entry.process.is_some())
     }
+    /// The durable user choice, independent of the child process state.
+    pub fn is_enabled(&self, id: &str) -> bool {
+        self.entries.get(id).is_some_and(|entry| entry.enabled)
+    }
     /// Drop a plugin from the registry entirely, stopping its process first.
     ///
     /// Used by uninstall, where the package the entry pointed at no longer
@@ -189,6 +193,12 @@ impl PluginRegistry {
         if entry.process.is_some() {
             return Ok(entry.last_output.clone());
         }
+        // Remember an explicit enable even if process creation or handshake fails.
+        if let Some(directory) = entry.data_file.parent() {
+            std::fs::create_dir_all(directory)?;
+        }
+        persist_output(entry, &entry.last_output, true)?;
+        entry.enabled = true;
         let started = (|| -> std::io::Result<_> {
             let mut process = Process::start(&entry.root, &entry.metadata)?;
             let mut output = process.exchange(HostMessage::Start {
@@ -682,6 +692,29 @@ mod tests {
             capabilities: Vec::new(),
             localizations: Default::default(),
         }
+    }
+
+    #[test]
+    fn failed_start_keeps_user_enable_choice_until_explicit_disable() {
+        let store = tempfile::tempdir().unwrap();
+        let metadata = metadata();
+        let root = store
+            .path()
+            .join("packages")
+            .join(&metadata.id)
+            .join(&metadata.version);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut registry = PluginRegistry::new();
+        registry.register(metadata.clone(), root.clone()).unwrap();
+        assert!(registry.enable(&metadata.id).is_err());
+        assert!(registry.is_enabled(&metadata.id));
+        let mut reopened = PluginRegistry::new();
+        reopened.register(metadata.clone(), root.clone()).unwrap();
+        assert!(reopened.is_enabled(&metadata.id));
+        reopened.disable(&metadata.id).unwrap();
+        let mut reopened = PluginRegistry::new();
+        reopened.register(metadata.clone(), root).unwrap();
+        assert!(!reopened.is_enabled(&metadata.id));
     }
 
     #[test]

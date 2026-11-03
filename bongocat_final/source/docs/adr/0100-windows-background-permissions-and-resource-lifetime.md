@@ -16,12 +16,14 @@ long-term leak freedom or compatibility with every game.
 
 ## Window and input ownership
 
-Creating a window or explicitly changing its topmost preference may set normal
-user32 topmost order without activation. Showing or ticking a window does not
-restore its topmost band or compete with a foreground window. Being covered does
-not overwrite the saved preference or stop host input, plugin ticks or persistence.
-This supersedes the repeated topmost guard in ADR-0096. Existing layered-window
-composition remains; exclusive fullscreen and game-specific restrictions remain.
+Creating a window or explicitly changing its topmost preference sets normal
+user32 topmost order without activation. While enabled, the owner thread checks
+the foreground window at most four times per second and restores lost topmost
+membership or stacking behind a topmost foreground window. At most two repairs
+are attempted per foreground transition, separated by at least 500 ms, to avoid
+an unbounded topmost contest. Being covered does not overwrite the preference or
+stop host input, plugin ticks or persistence. Existing layered-window composition
+remains; exclusive fullscreen and game-specific restrictions remain.
 
 `overlay.visible` persists only an explicit user show/hide choice and defaults to
 true in older configurations. Startup restores it, including a hidden first run
@@ -66,15 +68,20 @@ legacy RUNASADMIN compatibility flag on the main executable's path must not
 also apply to the broker (reusing that path fails with Win32 error 740). The
 component accepts only its internal broker invocation and cannot start another
 host, change startup registration or open Settings when launched directly.
-The linked token must have the same user/session, medium integrity and no
-elevation. CreateEnvironmentBlock supplies a fresh user environment instead of
-inheriting elevated-process compatibility layers. Only explicit anonymous stdio
-handles are inherited. The broker and
-descendants belong to a kill-on-close job; failure to acquire or validate the token
-fails closed. The ordinary host adds no broker. The existing plugin protocol is
-unchanged. Pipe forwarding flushes each chunk before reading again: length-prefixed
-binary messages must not wait for a newline in stdout's line buffer. Actual UAC and process-token acceptance still requires an interactive
-Windows check; compilation alone does not satisfy this gate.
+The elevated host asks the interactive Explorer shell to launch the broker at
+ordinary integrity. Two separate local named pipes carry each direction; their
+security descriptor permits only the current account and SYSTEM and rejects
+remote clients. The host verifies both pipe client PIDs, executable path, user,
+session, elevation and medium integrity before sending paths. The broker verifies
+the pipe servers' PID, account, session and elevated token, then verifies the
+actual plugin process is also medium integrity. The broker and descendants are
+assigned to a kill-on-close job before plugin launch. Failed checks fail closed;
+the ordinary host adds no broker. Direct broker invocation is rejected. The
+existing plugin protocol is unchanged, and forwarding flushes each binary chunk.
+On 2026-11-03 an interactive UAC test with an asserted elevated host started,
+ticked and stopped all three extracted 2.5.2 companions; each actual plugin token
+passed the broker's medium-integrity check. The 2.5.3 installer payload still
+requires its own acceptance.
 
 ## Installer and verification
 

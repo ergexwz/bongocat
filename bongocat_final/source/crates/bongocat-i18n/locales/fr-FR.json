@@ -583,6 +583,7 @@
     }
   },
   "plugins": {
+    "retry": "Réessayer",
     "enable": "Activer",
     "disable": "Désactiver",
     "loading": "Chargement des plugins…",

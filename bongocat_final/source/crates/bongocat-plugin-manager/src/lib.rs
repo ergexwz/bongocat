@@ -366,6 +366,9 @@ impl PluginManager {
     pub fn list_plugins(&self) -> Vec<(PluginMetadata, PluginState)> {
         self.registry.list()
     }
+    pub fn plugin_is_enabled(&self, id: &str) -> bool {
+        self.registry.is_enabled(id)
+    }
     pub fn enable_plugin(&mut self, id: &str) -> Result<(), PluginManagerError> {
         self.registry.enable(id).map(|_| ()).map_err(Into::into)
     }

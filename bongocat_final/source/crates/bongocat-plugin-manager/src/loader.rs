@@ -11,6 +11,7 @@ use std::{
     io,
     path::Path,
     sync::mpsc::{self, Receiver},
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -18,11 +19,11 @@ use std::{
 pub(crate) struct Process {
     child: PluginProcess,
     input: Option<Box<dyn io::Write + Send>>,
-    responses: Receiver<io::Result<Response>>,
+    responses: Receiver<io::Result<(u64, Response)>>,
     reader: Option<JoinHandle<()>>,
     sequence: u64,
     icon_text: bool,
-    push_output: bool,
+    pending_push: Arc<Mutex<Option<(u64, Response)>>>,
     companion_menu: bool,
     menu_tree: bool,
     host_bubble: bool,
@@ -70,20 +71,35 @@ impl Process {
         let (sender, responses) = mpsc::sync_channel(2);
         let owner = thread::current();
         let push = metadata.capabilities.contains(&Capability::PushOutputV1);
+        let pending_push = Arc::new(Mutex::new(None));
+        let reader_push = Arc::clone(&pending_push);
         let reader = thread::spawn(move || {
+            let mut order = 0u64;
             loop {
                 let response = read_frame::<Response>(&mut output);
+                order = order.saturating_add(1);
                 let failed = response.is_err();
                 let update = push
                     && response
                         .as_ref()
                         .is_ok_and(|response| response.sequence == 0);
-                // Unsolicited output cannot block process cleanup or grow memory.
-                if sender.try_send(response).is_err() || failed {
-                    break;
-                }
+                // Pushes are latest-value state; keep request replies in their own
+                // bounded queue so a burst cannot displace a requested reply.
                 if update {
+                    *reader_push
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        response.ok().map(|response| (order, response));
                     owner.unpark();
+                    continue;
+                }
+                // Unsolicited output cannot block process cleanup or grow memory.
+                if sender
+                    .try_send(response.map(|response| (order, response)))
+                    .is_err()
+                    || failed
+                {
+                    break;
                 }
             }
         });
@@ -93,7 +109,7 @@ impl Process {
             responses,
             reader: Some(reader),
             sequence: 0,
-            push_output: push,
+            pending_push,
             icon_text: metadata.capabilities.contains(&Capability::IconTextV1),
             companion_menu: metadata.capabilities.contains(&Capability::CompanionV1),
             menu_tree: metadata
@@ -118,6 +134,13 @@ impl Process {
             .input
             .take()
             .ok_or_else(|| io::Error::other("plugin stopped"))?;
+        // Starting native UI runtimes under load can take longer than an
+        // ordinary tick. Keep every exchange bounded, with separate budgets.
+        let budget = match &message {
+            HostMessage::Handshake { .. } | HostMessage::Start { .. } => Duration::from_secs(5),
+            HostMessage::Stop => Duration::from_secs(3),
+            _ => Duration::from_secs(2),
+        };
         let request = Request {
             sequence: self.sequence,
             message,
@@ -128,7 +151,7 @@ impl Process {
             let result = write_frame(&mut input, &request);
             let _ = written.send((input, result));
         });
-        let deadline = Instant::now() + Duration::from_millis(750);
+        let deadline = Instant::now() + budget;
         let completed = completion.recv_timeout(deadline.saturating_duration_since(Instant::now()));
         if completed.is_err() {
             let _ = self.child.kill();
@@ -140,19 +163,16 @@ impl Process {
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "plugin write deadline"))?;
         self.input = Some(input);
         result?;
-        let response = loop {
-            let response = self
-                .responses
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::TimedOut, "plugin response deadline")
-                })??;
-            if response.sequence == 0 && self.push_output {
-                self.validate_update(response)?;
-                continue;
-            }
-            break response;
-        };
+        let (reply_order, response) = self
+            .responses
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "plugin response deadline"))??;
+        // A push sent before this reply cannot replace the newer reply. A push
+        // sent after it stays queued for the next service update.
+        let stale = take_push_before_reply(&self.pending_push, reply_order);
+        if let Some(response) = stale {
+            self.validate_update(response)?;
+        }
         if response.sequence != self.sequence {
             return Err(io::Error::other("plugin response sequence mismatch"));
         }
@@ -204,10 +224,19 @@ impl Process {
         Ok(())
     }
     pub(crate) fn update(&mut self) -> io::Result<Option<PluginOutput>> {
-        let mut latest = None;
+        let push = self
+            .pending_push
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let mut latest = push
+            .map(|(_, response)| self.validate_update(response))
+            .transpose()?;
         for _ in 0..2 {
             match self.responses.try_recv() {
-                Ok(response) => latest = Some(self.validate_update(response?)?),
+                Ok(response) => {
+                    latest = Some(self.validate_update(response?.1)?);
+                }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     return Err(io::Error::other("plugin reader stopped"));
@@ -219,7 +248,7 @@ impl Process {
     pub(crate) fn stop(&mut self) -> io::Result<PluginOutput> {
         let output = self.exchange(HostMessage::Stop);
         self.input.take();
-        let deadline = Instant::now() + Duration::from_millis(750);
+        let deadline = Instant::now() + Duration::from_secs(3);
         while self.child.try_wait()?.is_none() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
@@ -246,6 +275,42 @@ impl Drop for Process {
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
+    }
+}
+
+fn take_push_before_reply(
+    pending: &Mutex<Option<(u64, Response)>>,
+    reply_order: u64,
+) -> Option<Response> {
+    let mut pending = pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if pending
+        .as_ref()
+        .is_some_and(|(order, _)| *order < reply_order)
+    {
+        pending.take().map(|(_, response)| response)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod ordered_push_tests {
+    use super::*;
+
+    #[test]
+    fn response_supersedes_older_push_but_preserves_later_push() {
+        let update = || Response {
+            sequence: 0,
+            result: Ok(PluginOutput::default()),
+        };
+        let pending = Mutex::new(Some((2, update())));
+        assert!(take_push_before_reply(&pending, 3).is_some());
+        assert!(pending.lock().unwrap().is_none());
+        *pending.lock().unwrap() = Some((4, update()));
+        assert!(take_push_before_reply(&pending, 3).is_none());
+        assert_eq!(pending.lock().unwrap().as_ref().unwrap().0, 4);
     }
 }
 

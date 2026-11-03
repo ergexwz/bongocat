@@ -142,11 +142,9 @@ fn overlay_window_owns_its_taskbar_button_at_creation() {
 /// The pet must always be a layered top-level window, not only while
 /// click-through is on.
 ///
-/// A borderless fullscreen game can present through DirectFlip and bypass DWM.
-/// A visible layered window is composed by DWM, so the game cannot take that
-/// path without the pet being composited too. Click-through only adds the
-/// pointer-transparent bit; it must not be the condition that makes the pet a
-/// layered window.
+/// Click-through only adds the pointer-transparent bit; it must not be the
+/// condition that makes the pet a layered window. Fullscreen games can still
+/// use presentation paths that cover the overlay.
 #[test]
 fn a_pet_window_is_layered_so_dwm_composes_it_over_fullscreen_games() {
     let canvas = CanvasInfo {
@@ -263,7 +261,7 @@ fn session_options_carry_the_taskbar_button_into_a_replacement_window() {
 /// window the user opens. The guard is the recovery path, so the test drives the
 /// demotion user32 performs and asserts the window comes back.
 #[test]
-fn showing_a_demoted_window_preserves_the_users_preference_without_reasserting_it() {
+fn showing_a_demoted_window_restores_the_users_topmost_preference() {
     let canvas = CanvasInfo {
         width: 2048.0,
         height: 1188.0,
@@ -289,7 +287,8 @@ fn showing_a_demoted_window_preserves_the_users_preference_without_reasserting_i
     }
     assert!(!window.is_topmost());
     window.show().unwrap();
-    assert!(!window.is_topmost());
+    window.maintain_topmost().unwrap();
+    assert!(window.is_topmost());
     assert!(window.is_always_on_top());
     window.set_always_on_top(false).unwrap();
     window.set_always_on_top(true).unwrap();

@@ -150,10 +150,10 @@ use windows::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos,
-                GetWindowLongPtrW, GetWindowRect, HTCAPTION, HTCLIENT, HTTRANSPARENT,
-                HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, MINMAXINFO, MSG,
-                PM_REMOVE, PeekMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE,
+                EnumWindows, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClientRect, GetCursorPos,
+                GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, HTCAPTION, HTCLIENT,
+                HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, MINMAXINFO,
+                MSG, PM_REMOVE, PeekMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
                 SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
                 WINDOW_STYLE, WINDOWPOS, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU,
@@ -163,7 +163,7 @@ use windows::{
                 WM_SIZING, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT,
                 WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WNDCLASSW, WS_EX_APPWINDOW,
                 WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-                WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -181,6 +181,3 @@ pub(crate) fn invariant_error(message: &str) -> Error {
 pub(crate) fn windows_error(context: &'static str) -> impl FnOnce(Error) -> OverlayError {
     move |error| OverlayError::new(format!("{context}: {error}"))
 }
-
-#[cfg(test)]
-use windows::Win32::UI::WindowsAndMessaging::WS_EX_TOPMOST;

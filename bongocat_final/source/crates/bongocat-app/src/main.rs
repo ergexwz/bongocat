@@ -488,7 +488,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // fatal — the plugin center reports it and the cat still runs.
     let plugin_storage_root = application.storage_root().to_path_buf();
     #[cfg(feature = "storage-test-injection")]
-    if run_options.performance_smoke_enabled() {
+    if run_options.performance_smoke_enabled()
+        && env::var_os("BONGOCAT_INPUT_DIAGNOSTIC_ONLY").is_none()
+    {
         let stop = AtomicBool::new(false);
         let offers = dev_plugins::source()
             .discover(bongocat_app::PRODUCT_VERSION, &stop)

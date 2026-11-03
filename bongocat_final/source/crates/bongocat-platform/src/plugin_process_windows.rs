@@ -1,37 +1,29 @@
 use super::*;
+#[path = "explorer_broker.rs"]
+mod explorer_broker;
 // Safety invariant: every native handle below is uniquely owned or borrowed
 // for a synchronous call; aligned token buffers and UTF-16 strings outlive all
 // pointers into them. No API opens a game process or installs a system hook.
 use ::windows::{
     Win32::{
-        Foundation::{
-            ERROR_CANCELLED, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation, WAIT_OBJECT_0,
-            WAIT_TIMEOUT,
-        },
+        Foundation::{ERROR_CANCELLED, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         Security::{
             EqualSid, GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation,
-            SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_LINKED_TOKEN, TOKEN_MANDATORY_LABEL,
-            TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenIntegrityLevel, TokenLinkedToken,
-            TokenSessionId, TokenUser,
+            SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER,
+            TokenElevation, TokenIntegrityLevel, TokenSessionId, TokenUser,
         },
         System::{
             Com::CoCreateGuid,
-            Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock},
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
                 SetInformationJobObject, TerminateJobObject,
             },
-            Pipes::CreatePipe,
             Threading::{
-                CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateEventW,
-                CreateProcessAsUserW, DeleteProcThreadAttributeList, EVENT_MODIFY_STATE,
-                EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetCurrentProcessId,
-                GetExitCodeProcess, InitializeProcThreadAttributeList, OpenEventW, OpenProcess,
-                OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
-                PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-                QueryFullProcessImageNameW, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-                SetEvent, UpdateProcThreadAttribute, WaitForSingleObject,
+                CreateEventW, EVENT_MODIFY_STATE, GetCurrentProcess, GetCurrentProcessId,
+                GetExitCodeProcess, OpenEventW, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+                SetEvent, WaitForSingleObject,
             },
         },
         UI::{
@@ -44,7 +36,7 @@ use ::windows::{
 use std::{
     ffi::OsStr,
     fs::File,
-    mem::{size_of, zeroed},
+    mem::size_of,
     os::windows::{
         ffi::{OsStrExt, OsStringExt},
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
@@ -131,44 +123,6 @@ pub fn is_elevated() -> io::Result<bool> {
     let current = token(unsafe { GetCurrentProcess() })?;
     Ok(info::<TOKEN_ELEVATION>(&current, TokenElevation)?.TokenIsElevated != 0)
 }
-fn medium_token() -> io::Result<OwnedHandle> {
-    let current = token(unsafe { GetCurrentProcess() })?;
-    let linked = info::<TOKEN_LINKED_TOKEN>(&current, TokenLinkedToken)?;
-    let linked = unsafe { owned(linked.LinkedToken) };
-    let integrity = variable_info(&linked, TokenIntegrityLevel)?;
-    // SAFETY: the record and SID were returned by GetTokenInformation and remain live.
-    let rid = unsafe {
-        let label = &*integrity.as_ptr().cast::<TOKEN_MANDATORY_LABEL>();
-        let count = *GetSidSubAuthorityCount(label.Label.Sid);
-        if count == 0 {
-            return Err(io::Error::other("invalid integrity SID"));
-        }
-        *GetSidSubAuthority(label.Label.Sid, u32::from(count - 1))
-    };
-    if !same_identity(&current, &linked)?
-        || rid != 0x2000
-        || info::<TOKEN_ELEVATION>(&linked, TokenElevation)?.TokenIsElevated != 0
-    {
-        return Err(io::Error::other(
-            "same-account medium-integrity token unavailable",
-        ));
-    }
-    Ok(linked)
-}
-
-fn pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
-    let mut read = HANDLE::default();
-    let mut write = HANDLE::default();
-    let security = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        bInheritHandle: true.into(),
-        ..Default::default()
-    };
-    // SAFETY: output pointers and the security descriptor are valid for the call.
-    unsafe { CreatePipe(&mut read, &mut write, Some(&security), 0) }.map_err(err)?;
-    Ok((unsafe { owned(read) }, unsafe { owned(write) }))
-}
-
 pub(super) struct Broker {
     process: OwnedHandle,
     job: OwnedHandle,
@@ -192,212 +146,25 @@ impl Broker {
     }
 }
 
-struct Attributes(Vec<usize>);
-impl Drop for Attributes {
-    fn drop(&mut self) {
-        // SAFETY: the list was initialized successfully and its buffer is still live.
-        unsafe {
-            DeleteProcThreadAttributeList(
-                ::windows::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST(
-                    self.0.as_mut_ptr().cast(),
-                ),
-            )
-        };
-    }
-}
-
-struct UserEnvironment(*mut std::ffi::c_void);
-impl Drop for UserEnvironment {
-    fn drop(&mut self) {
-        // SAFETY: this pointer was returned by CreateEnvironmentBlock and is
-        // uniquely owned until the synchronous process creation has completed.
-        if !self.0.is_null() {
-            let _ = unsafe { DestroyEnvironmentBlock(self.0) };
-        }
-    }
-}
-
 pub(super) fn spawn_broker(
     entry: &Path,
     data: &Path,
     executable: &Path,
 ) -> io::Result<PluginProcess> {
-    let linked = medium_token()?;
-    let executable = executable.canonicalize()?;
-    let mut environment = UserEnvironment(std::ptr::null_mut());
-    // SAFETY: linked is the validated same-user medium token. A fresh user
-    // environment avoids inheriting elevated-process compatibility layers.
-    unsafe { CreateEnvironmentBlock(&mut environment.0, Some(raw(&linked)), false) }
-        .map_err(err)?;
-    // Windows file names cannot contain quotes; reject embedded NULs as well.
-    let arguments = [
-        executable.as_os_str(),
-        OsStr::new("--internal-plugin-broker"),
-        entry.as_os_str(),
-        data.as_os_str(),
-    ];
-    let mut command = Vec::new();
-    for arg in arguments {
-        let bytes: Vec<u16> = arg.encode_wide().collect();
-        if bytes.iter().any(|c| *c == 0 || *c == 34) {
-            return Err(io::Error::other("invalid broker argument"));
-        }
-        command.push(34);
-        // Doubling trailing slashes prevents them from escaping the closing quote.
-        command.extend_from_slice(&bytes);
-        command.extend(std::iter::repeat_n(
-            92,
-            bytes.iter().rev().take_while(|c| **c == 92).count(),
-        ));
-        command.extend_from_slice(&[34, 32]);
-    }
-    command.push(0);
-    let exe = wide(executable.as_os_str());
-    let (child_in, parent_in) = pipe()?;
-    let (parent_out, child_out) = pipe()?;
-    // SAFETY: only the child's three explicit pipe handles are inheritable.
-    unsafe {
-        SetHandleInformation(raw(&parent_in), HANDLE_FLAG_INHERIT.0, Default::default())
-            .map_err(err)?;
-        SetHandleInformation(raw(&parent_out), HANDLE_FLAG_INHERIT.0, Default::default())
-            .map_err(err)?;
-    }
-    let null: OwnedHandle = std::fs::OpenOptions::new().write(true).open("NUL")?.into();
-    // SAFETY: only this explicitly listed null handle is inherited as stderr.
-    unsafe { SetHandleInformation(raw(&null), HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT) }
-        .map_err(err)?;
-    let mut handles = [raw(&child_in), raw(&child_out), raw(&null)];
-    let mut bytes = 0;
-    let _ = unsafe { InitializeProcThreadAttributeList(None, 1, None, &mut bytes) };
-    let mut buffer = vec![0usize; bytes.div_ceil(size_of::<usize>())];
-    let list = ::windows::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST(
-        buffer.as_mut_ptr().cast(),
-    );
-    unsafe { InitializeProcThreadAttributeList(Some(list), 1, None, &mut bytes) }.map_err(err)?;
-    let _attributes = Attributes(buffer);
-    unsafe {
-        UpdateProcThreadAttribute(
-            list,
-            0,
-            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-            Some(handles.as_mut_ptr().cast()),
-            size_of_val(&handles),
-            None,
-            None,
-        )
-    }
-    .map_err(err)?;
-    let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
-    startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = raw(&child_in);
-    startup.StartupInfo.hStdOutput = raw(&child_out);
-    startup.StartupInfo.hStdError = raw(&null);
-    startup.lpAttributeList = list;
-    let job = unsafe { owned(CreateJobObjectW(None, PCWSTR::null()).map_err(err)?) };
-    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    unsafe {
-        SetInformationJobObject(
-            raw(&job),
-            JobObjectExtendedLimitInformation,
-            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-            size_of_val(&limits) as u32,
-        )
-    }
-    .map_err(err)?;
-    let mut process = PROCESS_INFORMATION::default();
-    // SAFETY: argv, handle list, startup record and token stay live; suspended
-    // creation lets us confine the broker before any plugin code can execute.
-    unsafe {
-        CreateProcessAsUserW(
-            Some(raw(&linked)),
-            PCWSTR(exe.as_ptr()),
-            Some(PWSTR(command.as_mut_ptr())),
-            None,
-            None,
-            true,
-            CREATE_NO_WINDOW
-                | CREATE_SUSPENDED
-                | EXTENDED_STARTUPINFO_PRESENT
-                | CREATE_UNICODE_ENVIRONMENT,
-            Some(environment.0),
-            PCWSTR::null(),
-            &startup.StartupInfo,
-            &mut process,
-        )
-    }
-    .map_err(err)?;
-    let process_handle = unsafe { owned(process.hProcess) };
-    let thread = unsafe { owned(process.hThread) };
-    if let Err(error) = unsafe { AssignProcessToJobObject(raw(&job), raw(&process_handle)) } {
-        let _ = unsafe {
-            ::windows::Win32::System::Threading::TerminateProcess(raw(&process_handle), 1)
-        };
-        return Err(err(error));
-    }
-    if unsafe { ResumeThread(raw(&thread)) } == u32::MAX {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(PluginProcess {
-        child: Process::Broker(Broker {
-            process: process_handle,
-            job,
-        }),
-        stdin: Some(Box::new(File::from(parent_in))),
-        stdout: Some(Box::new(File::from(parent_out))),
-    })
+    explorer_broker::spawn(entry, data, executable)
 }
 
 pub fn run_broker_if_requested() -> Option<io::Result<()>> {
     let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref() != Some(OsStr::new("--internal-plugin-broker")) {
-        return None;
+    match args.next().as_deref() {
+        Some(command) if command == OsStr::new("--internal-plugin-broker-pipe") => {
+            Some(explorer_broker::run(args))
+        }
+        Some(command) if command == OsStr::new("--internal-plugin-broker") => Some(Err(
+            io::Error::other("broker requires an authenticated parent"),
+        )),
+        _ => None,
     }
-    Some((|| {
-        if is_elevated()? {
-            return Err(io::Error::other("plugin broker must not be elevated"));
-        }
-        let entry = args
-            .next()
-            .ok_or_else(|| io::Error::other("missing plugin entry"))?;
-        let data = args
-            .next()
-            .ok_or_else(|| io::Error::other("missing plugin data"))?;
-        if args.next().is_some() {
-            return Err(io::Error::other("unexpected broker argument"));
-        }
-        let entry = Path::new(&entry).canonicalize()?;
-        let mut command = Command::new(&entry);
-        command
-            .current_dir(
-                entry
-                    .parent()
-                    .ok_or_else(|| io::Error::other("invalid plugin root"))?,
-            )
-            .env("BONGOCAT_PLUGIN_DATA_DIR", data)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-        let mut child = command.spawn()?;
-        let mut input = child
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("plugin stdin unavailable"))?;
-        let mut output = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("plugin stdout unavailable"))?;
-        std::thread::spawn(move || {
-            let _ = forward_pipe(&mut io::stdin().lock(), &mut input);
-        });
-        let result = forward_pipe(&mut output, &mut io::stdout().lock());
-        let _ = child.kill();
-        let _ = child.wait();
-        result.map(|_| ())
-    })())
 }
 
 // The child proves its identity while its parent is still alive, then waits for

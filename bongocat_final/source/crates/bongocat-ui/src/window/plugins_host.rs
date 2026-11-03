@@ -2123,6 +2123,24 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn failed_enabled_plugin_keeps_switch_and_offers_retry(cx: &mut TestAppContext) {
+        let mut card = sample_card();
+        card.enabled = true;
+        card.failed = true;
+        let (_, visual) = card_page(cx, vec![card], 800.);
+        visual.run_until_parked();
+        visual.update(|window, _| {
+            assert!(window.try_find("plugin-toggle-com.example.card").is_some());
+            assert!(window.try_find("plugin-retry-com.example.card").is_some());
+            assert!(
+                window
+                    .try_find("plugin-settings-com.example.card")
+                    .is_none()
+            );
+        });
+    }
+
+    #[gpui_kit::test]
     fn update_actions_stay_inside_cards_and_wrap_as_a_whole_footer(cx: &mut TestAppContext) {
         for width in [360., 480., 800., 1_200., 1_600.] {
             // Pomodoro publishes three model-window controls on top of the

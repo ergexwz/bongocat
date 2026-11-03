@@ -472,6 +472,7 @@ fn the_native_and_component_halves_pin_together() {
 #[test]
 fn overlay_stepper_values_are_bounded_and_preserve_other_settings() {
     let settings = SettingsOverlay {
+        render_quality: Default::default(),
         window_mode: false,
         window_background_color: [0, 255, 0],
         click_through: false,

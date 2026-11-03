@@ -583,6 +583,7 @@
     }
   },
   "plugins": {
+    "retry": "重试",
     "enable": "启用",
     "disable": "停用",
     "loading": "正在加载插件…",

@@ -420,6 +420,13 @@ struct Worker {
     last_pet_bounds: Option<PetBounds>,
     last_pet_state: Option<PetState>,
     seen_bubbles: BTreeMap<String, BTreeSet<String>>,
+    recovery: BTreeMap<String, Recovery>,
+}
+
+struct Recovery {
+    failures: usize,
+    next_attempt: Instant,
+    running_since: Option<Instant>,
 }
 
 struct CatalogJob {
@@ -536,6 +543,7 @@ fn run(
         last_pet_bounds: None,
         last_pet_state: None,
         seen_bubbles: BTreeMap::new(),
+        recovery: BTreeMap::new(),
     };
     worker.initialize_running_input_activity();
     worker.run(stop)
@@ -609,6 +617,7 @@ impl Worker {
             self.drain_interactions();
             self.dispatch_tick();
             self.manager.collect_updates();
+            self.recover_plugins();
             self.publish_companion();
             self.compose();
             thread::park_timeout(LOOP_INTERVAL);
@@ -949,6 +958,62 @@ impl Worker {
             .initialize_input_activity(id, self.now_ms(), current);
     }
 
+    fn recover_plugins(&mut self) {
+        const DELAYS: [Duration; 3] = [
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+            Duration::from_secs(10),
+        ];
+        let now = Instant::now();
+        let plugins = self.manager.list_plugins();
+        self.recovery.retain(|id, _| {
+            plugins.iter().any(|(metadata, _)| &metadata.id == id)
+                && self.manager.plugin_is_enabled(id)
+        });
+        for (metadata, state) in plugins {
+            let id = metadata.id;
+            if !self.manager.plugin_is_enabled(&id) {
+                continue;
+            }
+            if state == PluginState::Enabled {
+                if let Some(recovery) = self.recovery.get_mut(&id) {
+                    let since = recovery.running_since.get_or_insert(now);
+                    if now.duration_since(*since) >= Duration::from_secs(300) {
+                        self.recovery.remove(&id);
+                    }
+                }
+                continue;
+            }
+            if state != PluginState::Failed {
+                continue;
+            }
+            let recovery = self.recovery.entry(id.clone()).or_insert(Recovery {
+                failures: 0,
+                next_attempt: now + DELAYS[0],
+                running_since: None,
+            });
+            if recovery.running_since.take().is_some() && recovery.failures < DELAYS.len() {
+                recovery.next_attempt = now + DELAYS[recovery.failures];
+            }
+            if recovery.failures >= DELAYS.len() || now < recovery.next_attempt {
+                continue;
+            }
+            recovery.failures += 1;
+            let attempt = recovery.failures;
+            if self.manager.enable_plugin(&id).is_ok() {
+                self.initialize_plugin_input_activity(&id);
+                // Re-deliver current pet geometry and mode to the new process.
+                self.last_pet_bounds = None;
+                self.last_pet_state = None;
+            } else if attempt < DELAYS.len() {
+                self.recovery
+                    .get_mut(&id)
+                    .expect("recovery exists")
+                    .next_attempt = Instant::now() + DELAYS[attempt];
+            }
+        }
+    }
+
     /// The elapsed monotonic clock a plugin counts with.
     fn now_ms(&self) -> u64 {
         self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
@@ -988,7 +1053,7 @@ impl Worker {
                         .get(&metadata.id)
                         .cloned()
                         .or_else(|| self.manager.installed_icon_url(&metadata.id)),
-                    enabled: state == PluginState::Enabled,
+                    enabled: self.manager.plugin_is_enabled(&metadata.id),
                     failed: state == PluginState::Failed,
                     version,
                     available_version,
@@ -1275,6 +1340,7 @@ impl Worker {
         {
             return Err(PluginCommandError::NotFound);
         }
+        self.recovery.remove(id);
         let result = if enabled {
             self.manager.enable_plugin(id)
         } else {
@@ -1466,6 +1532,62 @@ fn operation(error: &PluginManagerError) -> PluginCommandError {
 mod tests {
     use super::*;
 
+    #[test]
+    fn failed_enabled_plugin_retries_at_most_three_times_and_can_be_disabled() {
+        use std::io::Write;
+        let store = tempfile::tempdir().unwrap();
+        let mut worker = test_worker(&store);
+        let id = "com.example.recovery";
+        let metadata = bongocat_plugin_sdk::PluginMetadata {
+            id: id.into(),
+            name: "Recovery".into(),
+            description: "fixture".into(),
+            version: "1.0.0".into(),
+            app_versions: ">=2.3.1".into(),
+            protocol_version: bongocat_plugin_sdk::PROTOCOL_VERSION,
+            entry: "plugin".into(),
+            icon: bongocat_plugin_sdk::PluginIcon::Emoji("R".into()),
+            capabilities: Vec::new(),
+            localizations: Default::default(),
+        };
+        let manifest = bongocat_plugin_manager::PluginManifest { metadata };
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
+        zip.start_file("plugin.json", options).unwrap();
+        zip.write_all(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        let executable = if cfg!(target_os = "windows") {
+            "plugin.exe"
+        } else {
+            "plugin"
+        };
+        zip.start_file(executable, options).unwrap();
+        zip.write_all(b"not an executable").unwrap();
+        let package = zip.finish().unwrap().into_inner();
+        worker.manager.install_local(&package).unwrap();
+        assert!(worker.set_enabled(id, true).is_err());
+        assert!(
+            worker
+                .center()
+                .cards
+                .iter()
+                .find(|card| card.id == id)
+                .unwrap()
+                .enabled
+        );
+        worker.recover_plugins();
+        for attempt in 1..=3 {
+            worker.recovery.get_mut(id).unwrap().next_attempt = Instant::now();
+            worker.recover_plugins();
+            assert_eq!(worker.recovery[id].failures, attempt);
+        }
+        worker.recover_plugins();
+        assert_eq!(worker.recovery[id].failures, 3);
+        worker.set_enabled(id, false).unwrap();
+        assert!(!worker.manager.plugin_is_enabled(id));
+        assert!(!worker.recovery.contains_key(id));
+    }
+
     fn test_worker(store: &tempfile::TempDir) -> Worker {
         let (_, endpoint) = PluginServiceClient::bounded(4);
         let (hud_producer, _) = latest_hud_channel();
@@ -1507,6 +1629,7 @@ mod tests {
             last_pet_bounds: None,
             last_pet_state: None,
             seen_bubbles: BTreeMap::new(),
+            recovery: BTreeMap::new(),
         }
     }
 

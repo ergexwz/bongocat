@@ -239,10 +239,24 @@ fn card_view(
         .items_center()
         .justify_end()
         .gap_2();
+    if installed && enabled && card.failed {
+        let retry_view = view.clone();
+        let retry_id = card.id.clone();
+        actions = actions.child(
+            Button::new(SharedString::from(format!("plugin-retry-{}", card.id)))
+                .icon(IconName::RefreshCw)
+                .tooltip(bongocat_i18n::text(locale, "plugins.retry"))
+                .disabled(busy || state.pending_package(&card.id, PluginPackageOperation::Enable))
+                .on_click(move |_, _, cx| {
+                    let id = retry_id.clone();
+                    retry_view.update(cx, |view, cx| view.set_plugin_enabled(&id, true, cx));
+                }),
+        );
+    }
     // The plugin's own model-window controls stay reachable from its card: the
     // same typed command the model window sends, carrying the plugin's own label
     // as its tooltip and the plugin's own glyph on the button.
-    if enabled {
+    if enabled && !card.failed {
         for node in &card.actions {
             let UiNode::Button { id, label, .. } = node else {
                 continue;

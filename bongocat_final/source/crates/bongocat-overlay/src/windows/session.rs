@@ -366,6 +366,8 @@ impl ProductOverlaySession {
 
     pub(crate) fn tick(&mut self) -> Result<OverlayTickOutcome, OverlayError> {
         let runtime_snapshot = self.runtime_client.snapshot();
+        #[cfg(debug_assertions)]
+        self.record_frame_diagnostics(&runtime_snapshot);
         if runtime_snapshot.state == RuntimeState::Stopped {
             return Err(OverlayError::new(
                 "runtime stopped while the product overlay was active",
@@ -450,8 +452,8 @@ impl ProductOverlaySession {
         // swap chain and the mask targets follow here, before anything draws
         // against them.
         let minimized = unsafe { IsIconic(self.overlay.window.hwnd) }.as_bool();
-        // Respect other applications' window order; background input stays active.
         if !minimized {
+            self.overlay.window.maintain_topmost()?;
             self.overlay.sync_window_size()?;
         }
         // Plugin UI rides along with the model: the newest layer is taken before
@@ -633,6 +635,60 @@ impl ProductOverlaySession {
         self.frames_presented = self.frames_presented.saturating_add(1);
         self.overlay.set_visible(true)?;
         Ok(OverlayTickOutcome::Presented)
+    }
+
+    /// Opt-in diagnostics for a bounded development run; contains counters only.
+    #[cfg(debug_assertions)]
+    fn record_frame_diagnostics(&self, snapshot: &bongocat_runtime::RuntimeSnapshot) {
+        use std::io::Write;
+        use std::sync::{
+            OnceLock,
+            atomic::{AtomicU64, Ordering},
+        };
+        static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+        static LAST: AtomicU64 = AtomicU64::new(u64::MAX);
+        let Some(path) = PATH.get_or_init(|| {
+            std::env::var_os("BONGOCAT_FRAME_DIAGNOSTICS").map(std::path::PathBuf::from)
+        }) else {
+            return;
+        };
+        let second = self.session_started.elapsed().as_secs();
+        if LAST.swap(second, Ordering::Relaxed) == second {
+            return;
+        }
+        if std::fs::metadata(path).is_ok_and(|m| m.len() >= 64 * 1024) {
+            return;
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let input = snapshot.platform_input;
+            // Only a count is recorded, never key identities or typed text.
+            let pressed = (1..=254)
+                .filter(|key| {
+                    // SAFETY: querying a virtual-key code has no retained pointers.
+                    unsafe {
+                        windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(*key) as u16
+                            & 0x8000
+                            != 0
+                    }
+                })
+                .count();
+            let _ = writeln!(
+                file,
+                "{second},frames={},dynamic={},revision={},captured={},consumed={},cursor={},async_pressed={},status={:?}",
+                self.frames_presented,
+                self.dynamic_snapshots,
+                snapshot.revision,
+                input.captured_edges,
+                input.consumed_edges,
+                input.cursor_captured,
+                pressed,
+                input.service_status
+            );
+        }
     }
 
     pub(crate) fn window_bounds(&self) -> Result<OverlayWindowBounds, OverlayError> {

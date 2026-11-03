@@ -7,6 +7,25 @@
 
 use super::*;
 
+struct ForegroundOrder {
+    foreground: HWND,
+    overlay: HWND,
+    foreground_above: bool,
+}
+
+unsafe extern "system" fn compare_foreground_order(hwnd: HWND, context: LPARAM) -> BOOL {
+    // SAFETY: EnumWindows invokes this synchronously with a live stack context.
+    let order = unsafe { &mut *(context.0 as *mut ForegroundOrder) };
+    if hwnd == order.foreground {
+        order.foreground_above = true;
+        return BOOL(0);
+    }
+    if hwnd == order.overlay {
+        return BOOL(0);
+    }
+    BOOL(1)
+}
+
 pub(crate) const WINDOW_CLASS: windows::core::PCWSTR = w!("BongoCatProductOverlayWindow");
 
 /// The taskbar half of the model window's extended style.
@@ -31,6 +50,10 @@ pub(crate) struct OverlayWindow {
     pub(crate) height: u32,
     pub(crate) _state: Box<OverlayWindowState>,
     pub(crate) _not_send_or_sync: std::marker::PhantomData<Rc<()>>,
+    guard_foreground: HWND,
+    guard_attempts: u8,
+    guard_last_attempt: Option<Instant>,
+    guard_last_check: Option<Instant>,
 }
 
 pub(crate) struct OverlayWindowState {
@@ -113,12 +136,9 @@ impl OverlayWindow {
         let mut extended = if options.window_mode {
             WS_EX_APPWINDOW
         } else {
-            // The pet is always a layered window, even when click-through is
-            // off. DWM always composites a visible layered top-level window, so
-            // a borderless fullscreen game's DirectFlip/independent-flip path
-            // can no longer bypass the pet and leave it invisible behind the
-            // game. The DirectComposition visual still supplies every pixel;
-            // layering is the composition contract, not pointer transparency.
+            // Keep the pet layered even when click-through is off. The
+            // DirectComposition visual supplies its pixels; layering does not
+            // guarantee visibility over every fullscreen presentation mode.
             taskbar_ex_style(options.taskbar_icon_visible)
                 | WS_EX_NOACTIVATE
                 | WS_EX_NOREDIRECTIONBITMAP
@@ -176,6 +196,10 @@ impl OverlayWindow {
             height: logical_height,
             _state: state,
             _not_send_or_sync: std::marker::PhantomData,
+            guard_foreground: HWND::default(),
+            guard_attempts: 0,
+            guard_last_attempt: None,
+            guard_last_check: None,
         };
         let dpi = unsafe { GetDpiForWindow(hwnd) };
         if dpi == 0 {
@@ -379,6 +403,9 @@ impl OverlayWindow {
 
     pub(crate) fn set_always_on_top(&mut self, always_on_top: bool) -> Result<(), OverlayError> {
         self.assert_owner_thread();
+        self.guard_attempts = 0;
+        self.guard_last_attempt = None;
+        self.guard_last_check = None;
         self.apply_z_order(if always_on_top {
             HWND_TOPMOST
         } else {
@@ -389,13 +416,63 @@ impl OverlayWindow {
     }
 
     /// Whether the window is currently a member of the topmost band.
-    #[cfg(test)]
     pub(crate) fn is_topmost(&self) -> bool {
         self.assert_owner_thread();
         // SAFETY: the HWND is live and confined to its owner thread, and
         // `GWL_EXSTYLE` only reads this window's own extended style bits.
         let style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) } as u32);
         style.contains(WS_EX_TOPMOST)
+    }
+
+    /// Check on the owner thread and never enter an unbounded topmost contest.
+    pub(crate) fn maintain_topmost(&mut self) -> Result<(), OverlayError> {
+        if !self._state.always_on_top || !self.is_visible() {
+            return Ok(());
+        }
+        if self
+            .guard_last_check
+            .is_some_and(|last| last.elapsed() < Duration::from_millis(250))
+        {
+            return Ok(());
+        }
+        self.guard_last_check = Some(Instant::now());
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground != self.guard_foreground {
+            self.guard_foreground = foreground;
+            self.guard_attempts = 0;
+            self.guard_last_attempt = None;
+        }
+        if self.guard_attempts >= 2
+            || self
+                .guard_last_attempt
+                .is_some_and(|last| last.elapsed() < Duration::from_millis(500))
+        {
+            return Ok(());
+        }
+        let mut order = ForegroundOrder {
+            foreground,
+            overlay: self.hwnd,
+            foreground_above: false,
+        };
+        let foreground_topmost = !foreground.0.is_null()
+            && foreground != self.hwnd
+            && (unsafe { GetWindowLongPtrW(foreground, GWL_EXSTYLE) } as u32 & WS_EX_TOPMOST.0
+                != 0);
+        if foreground_topmost {
+            // SAFETY: synchronous enumeration borrows the stack context only for this call.
+            let _ = unsafe {
+                EnumWindows(
+                    Some(compare_foreground_order),
+                    LPARAM((&mut order as *mut ForegroundOrder) as isize),
+                )
+            };
+        }
+        if !self.is_topmost() || order.foreground_above {
+            self.guard_attempts += 1;
+            self.guard_last_attempt = Some(Instant::now());
+            self.apply_z_order(HWND_TOPMOST)?;
+        }
+        Ok(())
     }
 
     /// Whether the window is asked to sit in the topmost band.

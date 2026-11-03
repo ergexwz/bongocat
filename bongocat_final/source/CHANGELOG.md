@@ -9,6 +9,7 @@
 
 ### 🐛 Bug Fixes
 
+- Improved Windows always-on-top recovery and plugin reliability, including ordinary-permission plugins when the app runs as administrator.
 - Fixed the Windows login startup task continuing to launch an old executable after the application folder moved.
 - Fixed the model window being hidden by DWM-composed borderless fullscreen games on Windows.
 
