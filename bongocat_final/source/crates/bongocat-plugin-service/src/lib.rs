@@ -60,6 +60,7 @@ pub use bongocat_plugin_sdk::InputActivity;
 /// An event feed attached once to the owner thread, never polled for input.
 pub trait PluginInputEvents: Send {
     fn set_waker(&self, thread: std::thread::Thread);
+    /// Drain ordered edges and return the cumulative overflow count.
     fn drain(&mut self) -> (Vec<bongocat_plugin_sdk::PluginInputEvent>, u64);
 }
 

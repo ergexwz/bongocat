@@ -80,7 +80,7 @@ pub struct OverlayInteractionSinks {
     /// with no plugin host looks like.
     pub hud_consumer: Option<HudConsumer>,
     /// Where a click that lands on a plugin's control is reported.
-    pub hud_interaction_sender: Option<SyncSender<OverlayPluginInteraction>>,
+    pub hud_interaction_sender: Option<bongocat_plugin_hud::WakingSender<OverlayPluginInteraction>>,
     /// Where the window reports its own size and backing scale.
     ///
     /// A composed layer has to match the window it is drawn into, so the native

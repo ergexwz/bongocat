@@ -33,6 +33,24 @@ impl NativeOverlay {
         context_menu_sender: Option<SyncSender<OverlayContextMenuRequest>>,
         resize_sender: Option<SyncSender<OverlayResizeOutcome>>,
     ) -> Result<Self, OverlayError> {
+        Self::create_inner(
+            frame,
+            options,
+            bounds,
+            context_menu_sender,
+            resize_sender,
+            None,
+        )
+    }
+
+    pub(crate) fn create_inner(
+        frame: &RenderFrame,
+        options: OverlaySessionOptions,
+        bounds: Option<OverlayWindowBounds>,
+        context_menu_sender: Option<SyncSender<OverlayContextMenuRequest>>,
+        resize_sender: Option<SyncSender<OverlayResizeOutcome>>,
+        previous: Option<&Renderer>,
+    ) -> Result<Self, OverlayError> {
         validate_options(options)?;
         let window = OverlayWindow::create(
             options,
@@ -41,7 +59,7 @@ impl NativeOverlay {
             context_menu_sender,
             resize_sender,
         )?;
-        let renderer = Renderer::create(&window, frame, options)?;
+        let renderer = Renderer::create(&window, frame, options, previous)?;
         Ok(Self {
             renderer,
             window,
@@ -204,6 +222,10 @@ pub(crate) struct ProductOverlaySession {
     pub(crate) input_diagnostics: Option<PlatformInputDiagnostics>,
     pub(crate) input_stopped: bool,
     pub(crate) frames_presented: u64,
+    pub(crate) frames_skipped: u64,
+    pub(crate) frame_timing: Option<crate::timing::FrameTimingCollector>,
+    pub(crate) presentation_dirty: bool,
+    pub(crate) presented_surface: Option<(isize, u32, u32, u32)>,
     pub(crate) dynamic_snapshots: u64,
     pub(crate) model_commit_rejections: u64,
     pub(crate) previous_snapshot: Arc<RenderSnapshot>,
@@ -217,7 +239,8 @@ pub(crate) struct ProductOverlaySession {
     /// plugin host looks like.
     pub(crate) hud_consumer: Option<HudConsumer>,
     /// Where a click on a plugin's control is reported.
-    pub(crate) hud_interaction_sender: Option<SyncSender<OverlayPluginInteraction>>,
+    pub(crate) hud_interaction_sender:
+        Option<bongocat_plugin_hud::WakingSender<OverlayPluginInteraction>>,
     /// Where the window reports its own size and backing scale, so the plugin
     /// service composes a layer that matches the window it will be drawn into.
     pub(crate) hud_viewport_reporter: Option<HudViewportReporter>,
@@ -326,6 +349,11 @@ impl ProductOverlaySession {
             input_diagnostics: None,
             input_stopped: false,
             frames_presented,
+            frames_skipped: 0,
+            frame_timing: std::env::var_os("BONGOCAT_FRAME_TIMING")
+                .map(|_| crate::timing::FrameTimingCollector::new()),
+            presentation_dirty: true,
+            presented_surface: None,
             dynamic_snapshots: 0,
             model_commit_rejections: 0,
             previous_snapshot: Arc::clone(&initial_frame.snapshot),
@@ -393,6 +421,7 @@ impl ProductOverlaySession {
             .options
             .with_runtime_settings(runtime_snapshot.overlay_settings);
         if next_options != self.options {
+            self.presentation_dirty = true;
             if self.options.requires_window_recreation(next_options) {
                 let bounds = self.overlay.window.bounds()?;
                 let bounds = if next_options.scale_percent != self.options.scale_percent {
@@ -459,7 +488,10 @@ impl ProductOverlaySession {
         // Plugin UI rides along with the model: the newest layer is taken before
         // the frame is drawn, and the window's own size is reported at the same
         // point so the next composed layer matches it.
-        self.take_plugin_layer()?;
+        let hud_changed = self.take_plugin_layer()?;
+        self.presentation_dirty |= hud_changed
+            || !self.overlay.window.is_visible()
+            || std::mem::take(&mut self.overlay.window._state.presentation_invalidated);
         if self.options.keep_inside_screen && !minimized {
             let bounds = self.overlay.window.bounds()?;
             // A box that is still outside the displays is only corrected once it
@@ -495,6 +527,7 @@ impl ProductOverlaySession {
         };
         if let Some(frame) = next_frame {
             let model_changed = frame.model_generation != self.overlay.renderer.model_generation;
+            self.presentation_dirty |= model_changed;
             if model_changed && !self.options.window_mode {
                 let bounds = self.overlay.window.bounds()?;
                 let mut replacement = match self.create_overlay(
@@ -563,6 +596,7 @@ impl ProductOverlaySession {
                     )?;
                 }
                 if frame.snapshot.as_ref() != self.previous_snapshot.as_ref() {
+                    self.presentation_dirty = true;
                     self.dynamic_snapshots = self.dynamic_snapshots.saturating_add(1);
                 }
                 self.last_frame = frame.clone();
@@ -575,46 +609,58 @@ impl ProductOverlaySession {
                     OverlayTickOutcome::Hidden
                 });
             }
-            match self.overlay.renderer.sync_frame(&frame) {
-                Ok(switched) => {
-                    if switched {
-                        self.overlay.resize_for_model(frame.snapshot.canvas)?;
-                        // A model switch in window mode rebuilds the GPU model,
-                        // so the panel the session is drawing goes back into the
-                        // new one instead of waiting for the next publication.
-                        // SAFETY: the renderer's device and context are used on
-                        // its owner thread and the layer is uploaded before the
-                        // borrow ends.
-                        unsafe {
-                            upload_plugin_layer(&mut self.overlay.renderer, self.hud_layer.layer())
+            if model_changed
+                || frame.model_commit.is_some()
+                || frame.snapshot.as_ref() != self.previous_snapshot.as_ref()
+            {
+                match self.overlay.renderer.sync_frame(&frame) {
+                    Ok(switched) => {
+                        if switched {
+                            self.overlay.resize_for_model(frame.snapshot.canvas)?;
+                            // A model switch in window mode rebuilds the GPU model,
+                            // so the panel the session is drawing goes back into the
+                            // new one instead of waiting for the next publication.
+                            // SAFETY: the renderer's device and context are used on
+                            // its owner thread and the layer is uploaded before the
+                            // borrow ends.
+                            unsafe {
+                                upload_plugin_layer(
+                                    &mut self.overlay.renderer,
+                                    self.hud_layer.layer(),
+                                )
+                            }
+                            .map_err(windows_error("upload the plugin layer"))?;
                         }
-                        .map_err(windows_error("upload the plugin layer"))?;
+                        if let Some(token) = frame.model_commit {
+                            report_model_commit(
+                                &self.runtime_client,
+                                &self.render_consumer,
+                                token,
+                                ModelCommitOutcome::Prepared,
+                            )?;
+                        }
+                        if frame.snapshot.as_ref() != self.previous_snapshot.as_ref() {
+                            self.presentation_dirty = true;
+                            self.dynamic_snapshots = self.dynamic_snapshots.saturating_add(1);
+                        }
+                        debug_assert!(!switched || self.options.window_mode);
+                        self.last_frame = frame.clone();
+                        self.previous_snapshot = frame.snapshot;
                     }
-                    if let Some(token) = frame.model_commit {
-                        report_model_commit(
+                    Err(error) if frame.model_commit.is_some() => {
+                        reject_model_commit(
                             &self.runtime_client,
                             &self.render_consumer,
-                            token,
-                            ModelCommitOutcome::Prepared,
+                            frame.model_commit.expect("checked model commit token"),
                         )?;
+                        self.model_commit_rejections =
+                            self.model_commit_rejections.saturating_add(1);
+                        let _ = error;
                     }
-                    if frame.snapshot.as_ref() != self.previous_snapshot.as_ref() {
-                        self.dynamic_snapshots = self.dynamic_snapshots.saturating_add(1);
-                    }
-                    debug_assert!(!switched || self.options.window_mode);
-                    self.last_frame = frame.clone();
-                    self.previous_snapshot = frame.snapshot;
+                    Err(error) => return Err(error),
                 }
-                Err(error) if frame.model_commit.is_some() => {
-                    reject_model_commit(
-                        &self.runtime_client,
-                        &self.render_consumer,
-                        frame.model_commit.expect("checked model commit token"),
-                    )?;
-                    self.model_commit_rejections = self.model_commit_rejections.saturating_add(1);
-                    let _ = error;
-                }
-                Err(error) => return Err(error),
+            } else {
+                self.last_frame = frame;
             }
         }
         if !overlay_visible {
@@ -623,6 +669,21 @@ impl ProductOverlaySession {
         if minimized && self.overlay.window.is_visible() {
             return Ok(OverlayTickOutcome::Deferred(Duration::from_millis(100)));
         }
+        // Compare actual rendered content. Runtime evaluation continues at the
+        // configured cadence, so breathing, physics and input still advance.
+        // SAFETY: this session owns the HWND and uses it on its owner thread.
+        let dpi = unsafe { GetDpiForWindow(self.overlay.window.hwnd) };
+        let surface = (
+            self.overlay.window.hwnd.0 as isize,
+            self.overlay.renderer.width,
+            self.overlay.renderer.height,
+            dpi,
+        );
+        if !self.presentation_dirty && self.presented_surface == Some(surface) {
+            self.frames_skipped = self.frames_skipped.saturating_add(1);
+            return Ok(OverlayTickOutcome::Unchanged);
+        }
+        let draw_started = Instant::now();
         match self.overlay.draw(self.frames_presented == 0) {
             Ok(()) => self.retry_backoff.record_success(),
             Err(error) if error.is_temporary_presentation_unavailable() => {
@@ -633,6 +694,17 @@ impl ProductOverlaySession {
             Err(error) => return Err(error),
         }
         self.frames_presented = self.frames_presented.saturating_add(1);
+        if let Some(timing) = &mut self.frame_timing {
+            let elapsed = draw_started.elapsed();
+            timing.record_draw(elapsed);
+            if elapsed
+                >= frame_interval_for_maximum_fps(self.options.maximum_fps).expect("validated FPS")
+            {
+                timing.record_missed_deadline();
+            }
+        }
+        self.presentation_dirty = false;
+        self.presented_surface = Some(surface);
         self.overlay.set_visible(true)?;
         Ok(OverlayTickOutcome::Presented)
     }
@@ -732,7 +804,7 @@ impl ProductOverlaySession {
     /// so an empty read means "keep the layer on screen" rather than "draw
     /// nothing": taking the panel down between two publications is exactly the
     /// flash the user sees as a panel that disappears.
-    fn take_plugin_layer(&mut self) -> Result<(), OverlayError> {
+    fn take_plugin_layer(&mut self) -> Result<bool, OverlayError> {
         let width = self.overlay.renderer.width;
         let height = self.overlay.renderer.height;
         // The window reports its own numbers before the layer is drawn: the plugin
@@ -746,7 +818,7 @@ impl ProductOverlaySession {
             reporter.publish(HudViewport::new(width, height, scale));
         }
         let Some(consumer) = &self.hud_consumer else {
-            return Ok(());
+            return Ok(false);
         };
         let change = self
             .hud_layer
@@ -761,7 +833,7 @@ impl ProductOverlaySession {
             unsafe { upload_plugin_layer(&mut self.overlay.renderer, self.hud_layer.layer()) }
                 .map_err(windows_error("upload the plugin layer"))?;
         }
-        Ok(())
+        Ok(change.layer_replaced)
     }
 
     /// Publish the plugin hit-test data to the window procedure.
@@ -875,8 +947,14 @@ impl ProductOverlaySession {
         context_menu_sender: Option<SyncSender<OverlayContextMenuRequest>>,
         resize_sender: Option<SyncSender<OverlayResizeOutcome>>,
     ) -> Result<NativeOverlay, OverlayError> {
-        let mut overlay =
-            NativeOverlay::create(frame, options, bounds, context_menu_sender, resize_sender)?;
+        let mut overlay = NativeOverlay::create_inner(
+            frame,
+            options,
+            bounds,
+            context_menu_sender,
+            resize_sender,
+            Some(&self.overlay.renderer),
+        )?;
         // A replacement window has no plugin pointer route of its own: the
         // interaction sender and the current hit-test data travel with it, or its
         // first click would find no control there.
@@ -945,6 +1023,8 @@ impl ProductOverlaySession {
             !self.options.keep_inside_screen || bounds_inside_screens(&screen_bounds_all(), bounds);
         Ok(ProductOverlayReport {
             frames_presented: self.frames_presented,
+            frames_skipped: self.frames_skipped,
+            frame_timing: self.frame_timing.map(|timing| timing.summary()),
             placement_fully_visible,
             dynamic_snapshots: self.dynamic_snapshots,
             model_commit_rejections: self.model_commit_rejections,

@@ -1,84 +1,18 @@
 //! The service drives a real plugin process and publishes what it draws.
 //!
-//! The package is built the way the packaging tool builds one — the checked-in
-//! manifest, compiled pomodoro binary and package-local icon in one ZIP — and
-//! installed through the manager, so this exercises the same lifecycle a
-//! download does. A checkout with no built plugin binary skips rather than
-//! pretending.
-
 use bongocat_plugin_hud::{HudInteraction, HudViewport};
 use bongocat_plugin_service::{PluginService, plugin_directory};
 use std::io::Write as _;
-
-#[cfg(target_os = "windows")]
-const BINARY_FILE: &str = "bongocat-pomodoro.exe";
-#[cfg(not(target_os = "windows"))]
-const BINARY_FILE: &str = "bongocat-pomodoro";
-
-const PLUGIN_ID: &str = "com.bongocat.pomodoro";
+#[path = "../../bongocat-plugin-manager/tests/support/mod.rs"]
+mod support;
+const PLUGIN_ID: &str = support::ID;
 const CATALOG_FILE: &str = "catalog.json";
 
-fn plugin_package() -> Option<Vec<u8>> {
-    plugin_package_with_manifest(|_| {})
+fn plugin_package() -> Vec<u8> {
+    support::package(|_| {})
 }
-
-fn plugin_package_with_manifest(edit: impl FnOnce(&mut serde_json::Value)) -> Option<Vec<u8>> {
-    let workspace = std::path::PathBuf::from(std::env::var_os("BONGOCAT_PLUGIN_TEST_ROOT")?);
-    let root = workspace.join("plugins/pomodoro");
-    let triple = host_target_triple();
-    let binary = [
-        workspace
-            .join("target")
-            .join(triple)
-            .join("release")
-            .join(BINARY_FILE),
-        workspace
-            .join("target")
-            .join(triple)
-            .join("debug")
-            .join(BINARY_FILE),
-        workspace.join("target/release").join(BINARY_FILE),
-        workspace.join("target/debug").join(BINARY_FILE),
-    ]
-    .into_iter()
-    .find(|candidate| candidate.is_file())
-    .or_else(|| panic!("BONGOCAT_PLUGIN_TEST_ROOT is set but {BINARY_FILE} was not built"))?;
-    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    archive.start_file("plugin.json", options).ok()?;
-    let mut manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("plugin.json")).ok()?).ok()?;
-    edit(&mut manifest);
-    archive
-        .write_all(&serde_json::to_vec(&manifest).ok()?)
-        .ok()?;
-    archive.start_file("resources/icon.png", options).ok()?;
-    archive
-        .write_all(&std::fs::read(root.join("resources/icon.png")).ok()?)
-        .ok()?;
-    archive
-        .start_file(BINARY_FILE, options.unix_permissions(0o755))
-        .ok()?;
-    archive.write_all(&std::fs::read(binary).ok()?).ok()?;
-    archive.finish().ok().map(|cursor| cursor.into_inner())
-}
-
-fn host_target_triple() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        return if cfg!(target_arch = "aarch64") {
-            "aarch64-apple-darwin"
-        } else {
-            "x86_64-apple-darwin"
-        };
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return "x86_64-pc-windows-msvc";
-    }
-    #[allow(unreachable_code)]
-    ""
+fn plugin_package_with_manifest(edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    support::package(edit)
 }
 
 /// A plugin that serves no Chinese copy is shown and driven in English.
@@ -88,11 +22,9 @@ fn host_target_triple() -> &'static str {
 /// never completes a half translation.
 #[test]
 fn a_plugin_without_chinese_copy_reads_english_on_its_card_and_controls() {
-    let Some(bytes) = plugin_package_with_manifest(|manifest| {
+    let bytes = plugin_package_with_manifest(|manifest| {
         manifest["metadata"]["localizations"] = serde_json::json!({});
-    }) else {
-        return;
-    };
+    });
     let store = tempfile::tempdir().unwrap();
     install_into(store.path(), &bytes);
     let (service, _) = PluginService::start(store.path(), 4).unwrap();
@@ -105,10 +37,7 @@ fn a_plugin_without_chinese_copy_reads_english_on_its_card_and_controls() {
     assert!(card.localizations.is_empty());
     assert_eq!(
         card.copy("zh-CN"),
-        (
-            "Pomodoro",
-            "A focus timer that helps you stay focused and plan your time."
-        )
+        ("Host fixture", "Deterministic host lifecycle fixture.")
     );
     assert!(card.actions.iter().any(|node| matches!(node,
         bongocat_plugin_sdk::UiNode::Button { id, label, .. }
@@ -125,11 +54,9 @@ fn a_partial_translation_is_refused_at_install() {
         serde_json::json!({"zh-CN": {"name": "番茄时钟"}}),
         serde_json::json!({"zh-CN": {"name": " ", "description": "专注计时器"}}),
     ] {
-        let Some(bytes) = plugin_package_with_manifest(|manifest| {
+        let bytes = plugin_package_with_manifest(|manifest| {
             manifest["metadata"]["localizations"] = localizations;
-        }) else {
-            return;
-        };
+        });
         let store = tempfile::tempdir().unwrap();
         let mut manager =
             bongocat_plugin_manager::PluginManager::new(plugin_directory(store.path())).unwrap();
@@ -153,13 +80,13 @@ fn install_into(store: &std::path::Path, bytes: &[u8]) {
         .expect("the package installs against its digest");
 }
 
-/// Start a service on a private store that already has the pomodoro installed.
-fn service_with_pomodoro() -> Option<(PluginService, tempfile::TempDir)> {
-    let bytes = plugin_package()?;
-    let store = tempfile::tempdir().ok()?;
+/// Start a service on a private store that already has the fixture installed.
+fn service_with_fixture() -> (PluginService, tempfile::TempDir) {
+    let bytes = plugin_package();
+    let store = tempfile::tempdir().unwrap();
     install_into(store.path(), &bytes);
     let (service, _handles) = PluginService::start(store.path(), 4).expect("plugin service starts");
-    Some((service, store))
+    (service, store)
 }
 
 #[test]
@@ -194,9 +121,7 @@ fn shutdown_closes_admission_even_when_the_store_is_unavailable() {
 
 #[test]
 fn shutdown_does_not_report_success_when_session_persistence_fails() {
-    let Some((service, store)) = service_with_pomodoro() else {
-        return;
-    };
+    let (service, store) = service_with_fixture();
     let client = service.client();
     client.set_enabled_blocking(PLUGIN_ID, true).unwrap();
     let session = plugin_directory(store.path())
@@ -216,9 +141,7 @@ fn shutdown_does_not_report_success_when_session_persistence_fails() {
 
 #[test]
 fn a_plugin_runs_and_keeps_running_without_a_window() {
-    let Some((service, store)) = service_with_pomodoro() else {
-        return;
-    };
+    let (service, store) = service_with_fixture();
     let client = service.client();
     let center = client.read_center_blocking().unwrap();
     assert_eq!(center.cards.len(), 1);
@@ -251,12 +174,10 @@ fn a_plugin_runs_and_keeps_running_without_a_window() {
 
 #[test]
 fn a_click_on_a_control_reaches_the_plugin_that_drew_it() {
-    let Some((service, _store)) = service_with_pomodoro() else {
-        return;
-    };
+    let (service, _store) = service_with_fixture();
     let client = service.client();
     client.set_enabled_blocking(PLUGIN_ID, true).unwrap();
-    // The pomodoro timer starts at zero, so the first `toggle` arms it at its full
+    // The fixture timer starts at zero, so the first `toggle` arms it at its full
     // length; the plugin's own view is what proves the click arrived.
     client.action_blocking(PLUGIN_ID, "toggle").unwrap();
     client.action_blocking(PLUGIN_ID, "restart").unwrap();
@@ -266,16 +187,14 @@ fn a_click_on_a_control_reaches_the_plugin_that_drew_it() {
             node,
             bongocat_plugin_sdk::UiNode::Text { text } if text == "25:00"
         )),
-        "restart must set the pomodoro timer to the configured length"
+        "restart must set the fixture timer to the configured length"
     );
     service.shutdown().unwrap();
 }
 
 #[test]
 fn the_composed_layer_matches_the_window_that_reported_itself() {
-    let Some(bytes) = plugin_package() else {
-        return;
-    };
+    let bytes = plugin_package();
     let store = tempfile::tempdir().unwrap();
     install_into(store.path(), &bytes);
     let (service, handles) = PluginService::start(store.path(), 4).unwrap();
@@ -344,9 +263,7 @@ fn the_composed_layer_matches_the_window_that_reported_itself() {
 
 #[test]
 fn a_panel_that_is_not_changing_is_not_republished() {
-    let Some(bytes) = plugin_package() else {
-        return;
-    };
+    let bytes = plugin_package();
     let store = tempfile::tempdir().unwrap();
     install_into(store.path(), &bytes);
     let (service, handles) = PluginService::start(store.path(), 4).unwrap();
@@ -374,7 +291,8 @@ fn a_panel_that_is_not_changing_is_not_republished() {
 
 /// The next non-empty layer, within a bounded wait.
 fn wait_for_layer(consumer: &bongocat_plugin_hud::HudConsumer) -> bongocat_plugin_hud::HudLayer {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
         if let Some(layer) = consumer.take_latest()
             && !layer.is_empty()
         {
@@ -411,9 +329,7 @@ fn wait_for_text(client: &bongocat_plugin_service::PluginServiceClient, expected
 
 #[test]
 fn uninstalling_removes_the_package_and_keeps_the_data() {
-    let Some((service, store)) = service_with_pomodoro() else {
-        return;
-    };
+    let (service, store) = service_with_fixture();
     let client = service.client();
     let data = plugin_directory(store.path()).join("data").join(PLUGIN_ID);
     std::fs::create_dir_all(&data).unwrap();
@@ -472,8 +388,6 @@ fn versioned_package(bytes: &[u8], version: &str, broken: bool) -> Vec<u8> {
             let mut manifest: serde_json::Value = serde_json::from_slice(&content).unwrap();
             manifest["metadata"]["version"] = version.into();
             content = serde_json::to_vec(&manifest).unwrap();
-        } else if broken {
-            content = b"not an executable".to_vec();
         }
         output
             .start_file(
@@ -483,6 +397,12 @@ fn versioned_package(bytes: &[u8], version: &str, broken: bool) -> Vec<u8> {
             )
             .unwrap();
         output.write_all(&content).unwrap();
+    }
+    if broken {
+        output
+            .start_file("fail-start", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        output.write_all(b"refuse startup").unwrap();
     }
     output.finish().unwrap().into_inner()
 }
@@ -531,9 +451,7 @@ fn write_local_catalog(directory: &std::path::Path, bytes: &[u8]) {
 
 #[test]
 fn a_damaged_installed_session_keeps_catalog_backed_recovery_controls() {
-    let Some(bytes) = plugin_package() else {
-        return;
-    };
+    let bytes = plugin_package();
     let catalog = tempfile::tempdir().unwrap();
     let store = tempfile::tempdir().unwrap();
     write_local_catalog(catalog.path(), &bytes);
@@ -576,9 +494,7 @@ fn a_damaged_installed_session_keeps_catalog_backed_recovery_controls() {
 
 #[test]
 fn local_catalog_install_update_rollback_uninstall_and_restart_share_one_lifecycle() {
-    let Some(bytes) = plugin_package() else {
-        return;
-    };
+    let bytes = plugin_package();
     let catalog = tempfile::tempdir().unwrap();
     let store = tempfile::tempdir().unwrap();
     write_local_catalog(catalog.path(), &bytes);
@@ -603,7 +519,10 @@ fn local_catalog_install_update_rollback_uninstall_and_restart_share_one_lifecyc
     client.install_available_blocking(PLUGIN_ID).unwrap();
     let installed = settled(&client);
     assert_eq!(installed.cards[0].version.as_deref(), Some("1.0.0"));
-    assert_eq!(installed.cards[0].icon_url, available.cards[0].icon_url);
+    assert_eq!(
+        std::fs::read(installed.cards[0].icon_url.as_ref().unwrap()).unwrap(),
+        std::fs::read(available.cards[0].icon_url.as_ref().unwrap()).unwrap()
+    );
     assert!(installed.cards[0].enabled, "first install must auto-enable");
     client
         .configure_blocking(
@@ -633,7 +552,7 @@ fn local_catalog_install_update_rollback_uninstall_and_restart_share_one_lifecyc
     write_local_catalog(catalog.path(), &versioned_package(&bytes, "1.2.0", true));
     client.refresh_blocking().unwrap();
     settled(&client);
-    client.install_available_blocking(PLUGIN_ID).unwrap();
+    assert!(client.install_available_blocking(PLUGIN_ID).is_err());
     let refused = settled(&client);
     assert!(refused.error.is_some());
     assert_eq!(refused.cards[0].version.as_deref(), Some("1.1.0"));
@@ -698,9 +617,7 @@ fn local_catalog_install_update_rollback_uninstall_and_restart_share_one_lifecyc
 
 #[test]
 fn first_install_start_failure_keeps_the_package_for_enable_retry() {
-    let Some(bytes) = plugin_package() else {
-        return;
-    };
+    let bytes = plugin_package();
     let catalog = tempfile::tempdir().unwrap();
     let store = tempfile::tempdir().unwrap();
     write_local_catalog(catalog.path(), &versioned_package(&bytes, "1.0.0", true));
@@ -711,11 +628,65 @@ fn first_install_start_failure_keeps_the_package_for_enable_retry() {
     let (service, _) = PluginService::start_with_source(store.path(), 4, source, None).unwrap();
     let client = service.client();
     settled(&client);
-    client.install_available_blocking(PLUGIN_ID).unwrap();
+    assert!(client.install_available_blocking(PLUGIN_ID).is_err());
     let failed = settled(&client);
     assert!(failed.error.is_some());
     assert_eq!(failed.cards[0].version.as_deref(), Some("1.0.0"));
-    assert!(!failed.cards[0].enabled);
+    assert!(failed.cards[0].failed && failed.cards[0].enabled);
     assert!(client.set_enabled_blocking(PLUGIN_ID, true).is_err());
     service.shutdown().unwrap();
+}
+
+#[test]
+#[ignore = "run by just plugin-tests in an isolated Release performance process"]
+fn nine_healthy_plugins_keep_replying_when_one_plugin_times_out() {
+    let store = tempfile::tempdir().unwrap();
+    let ids: Vec<_> = (0..10)
+        .map(|index| format!("com.example.isolation-{index}"))
+        .collect();
+    for id in &ids {
+        install_into(
+            store.path(),
+            &support::package(|manifest| {
+                manifest["metadata"]["id"] = id.as_str().into();
+            }),
+        );
+    }
+    let (service, _) = PluginService::start(store.path(), 64).unwrap();
+    let client = service.client();
+    for id in &ids {
+        client.set_enabled_blocking(id, true).unwrap();
+    }
+    let slow_client = client.clone();
+    let slow_id = ids[9].clone();
+    let slow = std::thread::spawn(move || slow_client.action_blocking(&slow_id, "slow"));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let healthy: Vec<_> = ids[..9].iter().map(|id| {
+        let client = client.clone();
+        let id = id.clone();
+        std::thread::spawn(move || {
+            let mut samples = Vec::new();
+            for _ in 0..100 {
+                let started = std::time::Instant::now();
+                client.action_blocking(&id, "benchmark-noop").unwrap();
+                samples.push(started.elapsed().as_micros());
+            }
+            samples.sort_unstable();
+            assert!(samples[94] <= 100_000, "healthy plugin {id} P95 exceeded 100 ms");
+            serde_json::json!({"plugin":id,"samples":100,"p95_us":samples[94],"max_us":samples[99]})
+        })
+    }).collect();
+    let results: Vec<_> = healthy
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    assert_eq!(
+        slow.join().unwrap().unwrap_err(),
+        bongocat_plugin_service::PluginCommandError::Timeout
+    );
+    client.set_enabled_blocking(&ids[9], false).unwrap();
+    service.shutdown().unwrap();
+    if let Some(path) = std::env::var_os("BONGOCAT_ISOLATION_REPORT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&results).unwrap()).unwrap();
+    }
 }

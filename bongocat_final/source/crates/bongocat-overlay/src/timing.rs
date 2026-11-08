@@ -6,7 +6,6 @@
 //! rather than interpolated, so a reported number is a frame that actually
 //! happened.
 
-#[cfg(any(target_os = "macos", test))]
 use std::time::Duration;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,20 +58,17 @@ pub struct FrameTimingSummary {
     pub missed_deadlines: u64,
 }
 
-#[cfg(any(target_os = "macos", test))]
 pub(crate) const MAX_FRAME_TIMING_SAMPLES: usize = 4_096;
 
 /// Collect a fixed maximum number of exact microsecond samples so diagnostic
 /// previews cannot grow memory use during long-running benchmark sessions.
 #[derive(Debug)]
-#[cfg(any(target_os = "macos", test))]
 pub(crate) struct FrameTimingCollector {
     pub(crate) draw_samples_us: Vec<u64>,
     pub(crate) samples_dropped: u64,
     pub(crate) missed_deadlines: u64,
 }
 
-#[cfg(any(target_os = "macos", test))]
 impl FrameTimingCollector {
     pub(crate) fn new() -> Self {
         Self {
@@ -110,7 +106,6 @@ impl FrameTimingCollector {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 pub(crate) fn percentile_nearest_rank(sorted_samples: &[u64], percentile: u8) -> u64 {
     if sorted_samples.is_empty() {
         return 0;

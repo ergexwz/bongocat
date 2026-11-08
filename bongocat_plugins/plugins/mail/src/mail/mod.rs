@@ -398,6 +398,16 @@ impl MailState {
 }
 
 impl CompanionState for MailState {
+    fn next_wake_ms(&self) -> Option<u64> {
+        Some(
+            (self
+                .last_retention
+                .saturating_add(60_000)
+                .saturating_sub(now_ms()))
+            .clamp(34, 60_000) as u64,
+        )
+    }
+
     fn id(&self) -> &'static str {
         "com.bongocat.mail"
     }

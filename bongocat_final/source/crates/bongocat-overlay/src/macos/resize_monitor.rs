@@ -27,7 +27,8 @@ pub(crate) struct ResizeMonitorState {
     /// claims the click that lands on it; the panel keeps every other click.
     pub(crate) plugin_targets: Cell<OverlayPluginTargets>,
     /// Where a plugin's click is reported.
-    pub(crate) plugin_interaction_sender: Cell<Option<SyncSender<OverlayPluginInteraction>>>,
+    pub(crate) plugin_interaction_sender:
+        Cell<Option<bongocat_plugin_hud::WakingSender<OverlayPluginInteraction>>>,
 }
 
 /// The right-button event monitor for one panel, together with the state its
@@ -61,7 +62,7 @@ pub(crate) fn install_context_menu_monitor(
     base: Option<ResizeBase>,
     context_menu_sender: Option<SyncSender<OverlayContextMenuRequest>>,
     resize_sender: Option<SyncSender<OverlayResizeOutcome>>,
-    plugin_interaction_sender: Option<SyncSender<OverlayPluginInteraction>>,
+    plugin_interaction_sender: Option<bongocat_plugin_hud::WakingSender<OverlayPluginInteraction>>,
 ) -> Option<RightButtonMonitor> {
     if context_menu_sender.is_none()
         && resize_sender.is_none()

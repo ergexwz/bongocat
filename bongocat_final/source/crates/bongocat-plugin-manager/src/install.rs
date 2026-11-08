@@ -428,7 +428,7 @@ pub(crate) fn validate(manifest: &PluginManifest) -> Result<(), PluginManagerErr
     validate_id(&metadata.id)?;
     if !valid_version(&metadata.version)
         || cargo_packager_updater::semver::VersionReq::parse(&metadata.app_versions).is_err()
-        || metadata.protocol_version != bongocat_plugin_sdk::PROTOCOL_VERSION
+        || !bongocat_plugin_sdk::supports_protocol(metadata.protocol_version)
         || !valid_basename(&metadata.entry)
         || !valid_text(&metadata.name)
         || !valid_text(&metadata.description)

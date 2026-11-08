@@ -17,7 +17,8 @@ use bongocat_plugin_hud::{
     latest_viewport_channel, load_platform_font,
 };
 use bongocat_plugin_manager::{
-    AvailablePlugin, PluginManager, PluginManagerError, PluginSource, PluginState, RegistryError,
+    AvailablePlugin, PluginActor, PluginManager, PluginManagerError, PluginOperation, PluginSource,
+    PluginState, RegistryError,
 };
 use bongocat_plugin_sdk::{
     ConfigValue, InputActivity, PetBounds, PetState, PluginBubble, PluginMenuNode, PluginOutput,
@@ -29,7 +30,7 @@ use std::{
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
+        mpsc::{Receiver, TryRecvError, sync_channel},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -101,15 +102,21 @@ pub struct QueuedPluginBubble {
 /// A cheap, cloneable writer for the model window's logical rectangle.
 #[derive(Clone, Default)]
 pub struct PetBoundsReporter {
+    wake: bongocat_plugin_hud::WorkerWake,
     slot: Arc<RwLock<Option<PetBounds>>>,
 }
 
 impl PetBoundsReporter {
     pub fn set(&self, bounds: PetBounds) {
-        *self
+        let mut slot = self
             .slot
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bounds);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *slot != Some(bounds) {
+            *slot = Some(bounds);
+            drop(slot);
+            self.wake.wake();
+        }
     }
 
     pub fn get(&self) -> Option<PetBounds> {
@@ -128,15 +135,21 @@ impl PetBoundsReporter {
 /// an invisible pet.
 #[derive(Clone, Default)]
 pub struct PetStateReporter {
+    wake: bongocat_plugin_hud::WorkerWake,
     slot: Arc<RwLock<Option<PetState>>>,
 }
 
 impl PetStateReporter {
     pub fn set(&self, state: PetState) {
-        *self
+        let mut slot = self
             .slot
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.as_ref() != Some(&state) {
+            *slot = Some(state);
+            drop(slot);
+            self.wake.wake();
+        }
     }
 
     pub fn get(&self) -> Option<PetState> {
@@ -169,7 +182,7 @@ pub struct PluginOverlayHandles {
     /// Where the window reports its own size and backing scale.
     pub viewport_reporter: HudViewportReporter,
     /// Where the window reports a click that landed on a plugin's control.
-    pub interaction_sender: SyncSender<HudInteraction>,
+    pub interaction_sender: bongocat_plugin_hud::WakingSender<HudInteraction>,
 }
 
 /// The service's own end of the overlay channels, plus its command client.
@@ -246,7 +259,7 @@ impl PluginService {
         let (client, endpoint) = PluginServiceClient::bounded(capacity);
         let (hud_producer, hud_consumer) = latest_hud_channel();
         let (viewport_reporter, viewport) = latest_viewport_channel();
-        let (interaction_sender, interactions) = sync_channel(64);
+        let (interaction_sender, interactions) = bongocat_plugin_hud::waking_channel(64);
         let stop = Arc::new(AtomicBool::new(false));
         let menu_items = Arc::new(RwLock::new(Vec::new()));
         let bubbles = Arc::new(Mutex::new(Vec::new()));
@@ -314,12 +327,16 @@ impl PluginService {
 
     /// Take the bubbles that arrived since the host last drained the queue.
     pub fn drain_bubbles(&self) -> Vec<QueuedPluginBubble> {
-        std::mem::take(
+        let bubbles = std::mem::take(
             &mut *self
                 .bubbles
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+        );
+        if !bubbles.is_empty() {
+            self.client.wake_signal().wake();
+        }
+        bubbles
     }
 
     /// Drop queued bubbles owned by a plugin that is no longer running.
@@ -333,6 +350,7 @@ impl PluginService {
     /// The writer the product frame loop uses to publish the pet rectangle.
     pub fn pet_bounds_reporter(&self) -> PetBoundsReporter {
         PetBoundsReporter {
+            wake: self.client.wake_signal(),
             slot: Arc::clone(&self.pet_bounds),
         }
     }
@@ -341,6 +359,7 @@ impl PluginService {
     /// model-window visibility.
     pub fn pet_state_reporter(&self) -> PetStateReporter {
         PetStateReporter {
+            wake: self.client.wake_signal(),
             slot: Arc::clone(&self.pet_state),
         }
     }
@@ -353,6 +372,7 @@ impl PluginService {
     pub fn shutdown(mut self) -> Result<(), PluginServiceStartError> {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
             worker
                 .join()
                 .map_err(|_| PluginServiceStartError::WorkerPanicked)?
@@ -366,6 +386,7 @@ impl Drop for PluginService {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
             let _ = worker.join();
         }
     }
@@ -375,7 +396,7 @@ impl Drop for PluginService {
 struct OverlaySinks {
     hud_producer: HudProducer,
     viewport: HudViewportReader,
-    interactions: Receiver<HudInteraction>,
+    interactions: bongocat_plugin_hud::WakingReceiver<HudInteraction>,
 }
 
 struct CompanionSinks {
@@ -387,6 +408,14 @@ struct CompanionSinks {
 
 /// The worker's whole state.
 struct Worker {
+    hud_dirty: bool,
+    companion_dirty: bool,
+    actors: BTreeMap<String, PluginActor>,
+    retiring: Vec<PluginActor>,
+    hud_frames: BTreeMap<String, PluginHudFrame>,
+    pending_operations: BTreeMap<u64, PendingOperation>,
+    next_operation: u64,
+    locale: Option<String>,
     manager: PluginManager,
     source: PluginSource,
     offers: Vec<AvailablePlugin>,
@@ -397,6 +426,7 @@ struct Worker {
     catalog_stop: Arc<AtomicBool>,
     input_activity: Option<Box<dyn Fn() -> InputActivity + Send>>,
     last_input_activity: InputActivity,
+    last_input_overflow: u64,
     input_events: Option<Box<dyn crate::PluginInputEvents>>,
     endpoint: PluginServiceEndpoint,
     hud: OverlaySinks,
@@ -423,6 +453,21 @@ struct Worker {
     recovery: BTreeMap<String, Recovery>,
 }
 
+enum AfterOperation {
+    None,
+    Enabled,
+    Disabled,
+    Reset,
+    Uninstalled,
+    Installed,
+}
+struct PendingOperation {
+    id: String,
+    reply: Option<PluginReply<Result<PluginCenterSnapshot, PluginCommandError>>>,
+    after: AfterOperation,
+    interaction: Option<crate::PluginInteractionFailure>,
+}
+
 struct Recovery {
     failures: usize,
     next_attempt: Instant,
@@ -442,6 +487,7 @@ struct InstallPayload {
 struct InstallJob {
     result: Receiver<Result<InstallPayload, String>>,
     worker: JoinHandle<()>,
+    reply: Option<PluginReply<Result<PluginCenterSnapshot, PluginCommandError>>>,
 }
 
 /// Catalog artwork fetched after the cards themselves are already readable.
@@ -479,6 +525,7 @@ fn run(
     input_events: Option<Box<dyn crate::PluginInputEvents>>,
     companion: CompanionSinks,
 ) -> Result<(), PluginManagerError> {
+    endpoint.bind_waker();
     let Ok(mut manager) = PluginManager::new(directory) else {
         // The store could not be opened at all. The service still answers, so the
         // plugin center can say what happened instead of reporting a service that
@@ -491,7 +538,7 @@ fn run(
             if unavailable.drain() {
                 break;
             }
-            thread::sleep(LOOP_INTERVAL);
+            thread::park();
         }
         return Ok(());
     };
@@ -512,11 +559,19 @@ fn run(
         error = Some(failure);
     }
     // Resume failures are represented by each affected card's Failed state.
-    let _ = manager.resume_enabled();
+    // Resume is queued per plugin after the service owner is ready.
     let last_input_activity = input_activity
         .as_ref()
         .map_or(InputActivity::default(), |read| read());
     let mut worker = Worker {
+        hud_dirty: true,
+        companion_dirty: true,
+        actors: BTreeMap::new(),
+        retiring: Vec::new(),
+        hud_frames: BTreeMap::new(),
+        pending_operations: BTreeMap::new(),
+        next_operation: 0,
+        locale: None,
         manager,
         source,
         offers: Vec::new(),
@@ -527,6 +582,7 @@ fn run(
         catalog_stop: Arc::clone(&stop),
         input_activity,
         last_input_activity,
+        last_input_overflow: 0,
         input_events,
         endpoint,
         hud,
@@ -545,6 +601,16 @@ fn run(
         seen_bubbles: BTreeMap::new(),
         recovery: BTreeMap::new(),
     };
+    for (metadata, _) in worker.manager.list_plugins() {
+        if worker.manager.plugin_is_enabled(&metadata.id) {
+            worker.queue_operation(
+                &metadata.id,
+                PluginOperation::Enable(true),
+                None,
+                AfterOperation::Enabled,
+            );
+        }
+    }
     worker.initialize_running_input_activity();
     worker.run(stop)
 }
@@ -599,12 +665,351 @@ impl Unavailable {
 }
 
 impl Worker {
+    fn next_wait(&self) -> Option<Duration> {
+        if self.endpoint.has_pending() {
+            return Some(Duration::ZERO);
+        }
+        let now = Instant::now();
+        let mut waits = Vec::new();
+        if self.input_activity.is_some() && self.input_events.is_none() {
+            waits.push(LOOP_INTERVAL);
+        }
+        if self.manager.list_plugins().iter().any(|(metadata, state)| {
+            *state == PluginState::Enabled && metadata.protocol_version == 1
+        }) {
+            waits.push((self.last_tick + TICK_INTERVAL).saturating_sub(self.started.elapsed()));
+        }
+        for (id, recovery) in &self.recovery {
+            if self
+                .pending_operations
+                .values()
+                .any(|pending| pending.id == *id)
+                || self.is_installing(id)
+            {
+                continue;
+            }
+            if let Some(since) = recovery.running_since {
+                waits.push((since + Duration::from_secs(300)).saturating_duration_since(now));
+            } else if recovery.failures < 3 {
+                waits.push(recovery.next_attempt.saturating_duration_since(now));
+            }
+        }
+        if self.compositor.is_some()
+            && self.last_signature.as_ref().is_some_and(|signature| {
+                signature
+                    .frames
+                    .iter()
+                    .all(|frame| frame.view.nodes.is_empty())
+            })
+        {
+            waits.push(
+                (self.hud_last_used + Duration::from_secs(30)).saturating_duration_since(now),
+            );
+        }
+        waits.into_iter().min()
+    }
+
+    fn apply_projection(
+        &mut self,
+        id: &str,
+        projection: Option<bongocat_plugin_manager::PluginProjection>,
+    ) {
+        let previous = self.manager.plugin_output(id);
+        let state = self
+            .manager
+            .list_plugins()
+            .into_iter()
+            .find(|(metadata, _)| metadata.id == id)
+            .map(|(_, state)| state);
+        let state_changed = state != projection.as_ref().map(|p| p.state);
+        let model_changed = state_changed
+            || previous.map(|o| &o.model) != projection.as_ref().map(|p| &p.output.model);
+        self.hud_dirty |= model_changed;
+        if model_changed {
+            match projection
+                .as_ref()
+                .filter(|p| p.state == PluginState::Enabled)
+            {
+                Some(p) => {
+                    self.hud_frames.insert(
+                        id.to_owned(),
+                        PluginHudFrame::new(id, p.output.model.clone()),
+                    );
+                }
+                None => {
+                    self.hud_frames.remove(id);
+                }
+            }
+        }
+        self.companion_dirty |= state_changed
+            || previous.map(|o| (&o.menu, &o.menu_tree, &o.bubbles))
+                != projection
+                    .as_ref()
+                    .map(|p| (&p.output.menu, &p.output.menu_tree, &p.output.bubbles));
+        self.manager.apply_projection(id, projection);
+    }
+    fn is_installing(&self, id: &str) -> bool {
+        self.install_jobs.contains_key(id)
+            || self.pending_operations.values().any(|pending| {
+                pending.id == id && matches!(pending.after, AfterOperation::Installed)
+            })
+    }
+
+    fn ensure_actor(&mut self, id: &str) -> bool {
+        if self.actors.contains_key(id) {
+            return true;
+        }
+        match self.manager.spawn_actor(id) {
+            Ok(actor) => {
+                if let Some(locale) = &self.locale {
+                    let _ = actor.submit(0, PluginOperation::Locale(locale.clone()));
+                }
+                self.actors.insert(id.into(), actor);
+                true
+            }
+            Err(error) => {
+                self.error = Some(error.to_string());
+                self.manager.mark_actor_failed(id);
+                self.hud_dirty = true;
+                self.companion_dirty = true;
+                false
+            }
+        }
+    }
+
+    fn queue_operation(
+        &mut self,
+        id: &str,
+        operation: PluginOperation,
+        reply: Option<PluginReply<Result<PluginCenterSnapshot, PluginCommandError>>>,
+        after: AfterOperation,
+    ) {
+        if !self.is_installing(id)
+            && !matches!(
+                operation,
+                PluginOperation::Install { .. }
+                    | PluginOperation::Reset
+                    | PluginOperation::Uninstall
+            )
+            && !self
+                .manager
+                .list_plugins()
+                .iter()
+                .any(|(metadata, _)| metadata.id == id)
+        {
+            if let Some(reply) = reply {
+                self.respond(reply, Err(PluginCommandError::NotFound));
+            }
+            return;
+        }
+        if self.is_installing(id) || !self.ensure_actor(id) {
+            if let Some(reply) = reply {
+                self.respond(reply, Err(PluginCommandError::Operation));
+            }
+            return;
+        }
+        self.next_operation = self
+            .next_operation
+            .checked_add(1)
+            .expect("operation sequence exhausted");
+        let sequence = self.next_operation;
+        let interaction = match &operation {
+            PluginOperation::Action(action) => Some(crate::PluginInteractionFailure::Action {
+                action: action.clone(),
+                code: PluginCommandError::Operation,
+            }),
+            PluginOperation::Configure(key, _) => {
+                Some(crate::PluginInteractionFailure::Configure {
+                    key: key.clone(),
+                    code: PluginCommandError::Operation,
+                })
+            }
+            _ => None,
+        };
+        match self.actors[id].submit(sequence, operation) {
+            Ok(()) => {
+                self.pending_operations.insert(
+                    sequence,
+                    PendingOperation {
+                        id: id.into(),
+                        reply,
+                        after,
+                        interaction,
+                    },
+                );
+            }
+            Err(error) => {
+                if let Some(reply) = reply {
+                    self.respond(
+                        reply,
+                        Err(if error.kind() == std::io::ErrorKind::WouldBlock {
+                            PluginCommandError::Busy
+                        } else {
+                            PluginCommandError::ServiceUnavailable
+                        }),
+                    );
+                }
+            }
+        }
+    }
+
+    fn signal(&mut self, id: &str, operation: PluginOperation) {
+        if self.ensure_actor(id) && self.actors[id].submit(0, operation).is_err() {
+            self.error = Some(format!("plugin queue is full: {id}"));
+        }
+    }
+
+    fn broadcast(&mut self, make: impl Fn() -> PluginOperation) {
+        let operation = make();
+        for (metadata, state) in self.manager.list_plugins() {
+            if state == PluginState::Enabled && operation.accepts(&metadata) {
+                self.signal(&metadata.id, operation.clone());
+            }
+        }
+    }
+
+    fn finish_actor_work(&mut self) {
+        let mut index = 0;
+        while index < self.retiring.len() {
+            if self.retiring[index].is_finished() {
+                if let Err(error) = self.retiring.swap_remove(index).join() {
+                    self.error = Some(error.to_string());
+                }
+            } else {
+                index += 1;
+            }
+        }
+        let failed: Vec<_> = self
+            .actors
+            .iter()
+            .filter(|(_, actor)| actor.is_finished())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in failed {
+            self.actors.remove(&id);
+            self.hud_frames.remove(&id);
+            self.manager.mark_actor_failed(&id);
+            self.hud_dirty = true;
+            self.companion_dirty = true;
+            let sequences: Vec<_> = self
+                .pending_operations
+                .iter()
+                .filter(|(_, pending)| pending.id == id)
+                .map(|(sequence, _)| *sequence)
+                .collect();
+            for sequence in sequences {
+                if let Some(pending) = self.pending_operations.remove(&sequence)
+                    && let Some(reply) = pending.reply
+                {
+                    self.respond(reply, Err(PluginCommandError::ServiceUnavailable));
+                }
+            }
+        }
+        let mut completed = Vec::new();
+        let mut projections = Vec::new();
+        for (id, actor) in &self.actors {
+            let mut bubbles = self
+                .companion
+                .bubbles
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let capacity = 256usize.saturating_sub(bubbles.len());
+            bubbles.extend(actor.take_events(capacity).into_iter().map(|bubble| {
+                QueuedPluginBubble {
+                    plugin: id.clone(),
+                    bubble,
+                }
+            }));
+            drop(bubbles);
+            if let Some(projection) = actor.take_projection() {
+                projections.push((id.clone(), projection));
+            }
+            while let Ok(completion) = actor.try_completion() {
+                completed.push(completion);
+            }
+            // A completion is published after its projection. Re-read after
+            // draining replies so the acknowledgement never exposes stale state.
+            if let Some(projection) = actor.take_projection() {
+                projections.push((id.clone(), projection));
+            }
+        }
+        for (id, projection) in projections {
+            self.apply_projection(&id, projection);
+        }
+        for completion in completed {
+            let Some(pending) = self.pending_operations.remove(&completion.sequence) else {
+                continue;
+            };
+            let result = completion.result.map_err(|error| {
+                let code = operation(&error);
+                self.error = Some(error.to_string());
+                code
+            });
+            if result.is_ok() {
+                self.interaction_failures.remove(&pending.id);
+                match pending.after {
+                    AfterOperation::Enabled | AfterOperation::Reset | AfterOperation::Installed => {
+                        self.initialize_plugin_input_activity(&pending.id);
+                        self.last_pet_bounds = None;
+                        self.last_pet_state = None;
+                    }
+                    AfterOperation::Disabled | AfterOperation::Uninstalled => {
+                        self.clear_plugin_bubbles(&pending.id)
+                    }
+                    AfterOperation::None => {}
+                }
+            } else if let (Err(code), Some(interaction)) = (&result, pending.interaction) {
+                let failure = match interaction {
+                    crate::PluginInteractionFailure::Action { action, .. } => {
+                        crate::PluginInteractionFailure::Action {
+                            action,
+                            code: code.clone(),
+                        }
+                    }
+                    crate::PluginInteractionFailure::Configure { key, .. } => {
+                        crate::PluginInteractionFailure::Configure {
+                            key,
+                            code: code.clone(),
+                        }
+                    }
+                };
+                self.interaction_failures
+                    .insert(pending.id.clone(), failure);
+            }
+            if let Some(reply) = pending.reply {
+                self.respond(reply, result);
+            }
+        }
+        let idle: Vec<_> = self
+            .actors
+            .keys()
+            .filter(|id| {
+                !self.manager.plugin_is_enabled(id)
+                    && !self
+                        .pending_operations
+                        .values()
+                        .any(|pending| &pending.id == *id)
+            })
+            .cloned()
+            .collect();
+        for id in idle {
+            if let Some(actor) = self.actors.remove(&id) {
+                actor.request_stop();
+                self.retiring.push(actor);
+            }
+        }
+    }
+
     fn run(&mut self, stop: Arc<AtomicBool>) -> Result<(), PluginManagerError> {
+        self.endpoint.bind_waker();
+        self.hud.viewport.set_waker(thread::current());
+        self.hud.interactions.set_waker(thread::current());
         if let Some(events) = &self.input_events {
             events.set_waker(thread::current());
         }
         self.refresh_catalog();
         while !stop.load(Ordering::Acquire) {
+            self.finish_actor_work();
             self.finish_catalog_job();
             self.finish_install_jobs();
             self.finish_icon_job();
@@ -616,11 +1021,14 @@ impl Worker {
             self.dispatch_input_activity();
             self.drain_interactions();
             self.dispatch_tick();
-            self.manager.collect_updates();
+            self.finish_actor_work();
             self.recover_plugins();
             self.publish_companion();
             self.compose();
-            thread::park_timeout(LOOP_INTERVAL);
+            match self.next_wait() {
+                Some(wait) => thread::park_timeout(wait),
+                None => thread::park(),
+            }
         }
         self.endpoint.close();
         if let Some(job) = self.catalog_job.take() {
@@ -628,9 +1036,34 @@ impl Worker {
         }
         for (_, job) in std::mem::take(&mut self.install_jobs) {
             let _ = job.worker.join();
+            if let Some(reply) = job.reply {
+                let _ = reply.respond(Err(PluginCommandError::ServiceUnavailable));
+            }
         }
         if let Some(job) = self.icon_job.take() {
             let _ = job.worker.join();
+        }
+        for actor in self.actors.values() {
+            actor.request_stop();
+        }
+        let mut shutdown_error = None;
+        for actor in std::mem::take(&mut self.retiring) {
+            if let Err(error) = actor.join() {
+                shutdown_error.get_or_insert(error);
+            }
+        }
+        for (_, actor) in std::mem::take(&mut self.actors) {
+            if let Err(error) = actor.join() {
+                shutdown_error.get_or_insert(error);
+            }
+        }
+        for (_, pending) in std::mem::take(&mut self.pending_operations) {
+            if let Some(reply) = pending.reply {
+                let _ = reply.respond(Err(PluginCommandError::ServiceUnavailable));
+            }
+        }
+        if let Some(error) = shutdown_error {
+            return Err(error);
         }
         self.manager.shutdown()?;
         if let Some(reply) = self.shutdown_reply.take() {
@@ -644,53 +1077,61 @@ impl Worker {
     /// reads are cheap: a few plugins and bounded outputs, once per service
     /// loop.
     fn publish_companion(&mut self) {
-        let mut menu = Vec::new();
-        let mut arrivals = Vec::new();
-        for (metadata, state) in self.manager.list_plugins() {
-            if state != PluginState::Enabled {
-                continue;
-            }
-            let Some(output) = self.manager.plugin_output(&metadata.id).cloned() else {
-                continue;
-            };
-            menu.extend(companion_menu(&metadata.id, &output));
-            let seen = self.seen_bubbles.entry(metadata.id.clone()).or_default();
-            for bubble in &output.bubbles {
-                if seen.insert(bubble.id.clone()) {
-                    arrivals.push(QueuedPluginBubble {
-                        plugin: metadata.id.clone(),
-                        bubble: bubble.clone(),
-                    });
+        if self.companion_dirty {
+            self.companion_dirty = false;
+            let mut menu = Vec::new();
+            let mut arrivals = Vec::new();
+            for (metadata, state) in self.manager.list_plugins() {
+                if state != PluginState::Enabled {
+                    continue;
+                }
+                let Some(output) = self.manager.plugin_output(&metadata.id) else {
+                    continue;
+                };
+                menu.extend(companion_menu(&metadata.id, output));
+                let seen = self.seen_bubbles.entry(metadata.id.clone()).or_default();
+                for bubble in &output.bubbles {
+                    if seen.insert(bubble.id.clone()) {
+                        arrivals.push(QueuedPluginBubble {
+                            plugin: metadata.id.clone(),
+                            bubble: bubble.clone(),
+                        });
+                    }
+                }
+                // A plugin publishes only its recent bubble ring, so a set that has
+                // grown far past that ring cannot still be matching live entries.
+                if seen.len() > 512 {
+                    seen.clear();
                 }
             }
-            // A plugin publishes only its recent bubble ring, so a set that has
-            // grown far past that ring cannot still be matching live entries.
-            if seen.len() > 512 {
-                seen.clear();
+            menu.truncate(16);
+            let menu_changed = {
+                let current = self
+                    .companion
+                    .menu_items
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                current.as_slice() != menu.as_slice()
+            };
+            if menu_changed {
+                *self
+                    .companion
+                    .menu_items
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = menu;
             }
-        }
-        menu.truncate(16);
-        let menu_changed = {
-            let current = self
-                .companion
-                .menu_items
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            current.as_slice() != menu.as_slice()
-        };
-        if menu_changed {
-            *self
-                .companion
-                .menu_items
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = menu;
-        }
-        if !arrivals.is_empty() {
-            self.companion
-                .bubbles
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .extend(arrivals);
+            if !arrivals.is_empty() {
+                let mut bubbles = self
+                    .companion
+                    .bubbles
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let capacity = 256usize.saturating_sub(bubbles.len());
+                if arrivals.len() > capacity {
+                    self.error = Some("legacy plugin bubble queue is full".into());
+                }
+                bubbles.extend(arrivals.into_iter().take(capacity));
+            }
         }
         let bounds = *self
             .companion
@@ -700,7 +1141,7 @@ impl Worker {
         if let Some(bounds) = bounds
             && self.last_pet_bounds != Some(bounds)
         {
-            self.manager.pet_bounds(bounds);
+            self.broadcast(|| PluginOperation::Bounds(bounds));
             self.last_pet_bounds = Some(bounds);
         }
         let pet_state = self
@@ -712,7 +1153,7 @@ impl Worker {
         if let Some(state) = pet_state
             && self.last_pet_state.as_ref() != Some(&state)
         {
-            self.manager.pet_state(state.clone());
+            self.broadcast(|| PluginOperation::Pet(state.clone()));
             self.last_pet_state = Some(state);
         }
     }
@@ -730,10 +1171,12 @@ impl Worker {
         operation: impl FnOnce() -> Result<Vec<AvailablePlugin>, String> + Send + 'static,
     ) {
         let (sender, result) = sync_channel(1);
+        let owner = thread::current();
         match thread::Builder::new()
             .name("bongocat-plugin-catalog".into())
             .spawn(move || {
                 let _ = sender.send(operation());
+                owner.unpark();
             }) {
             Ok(worker) => self.catalog_job = Some(CatalogJob { result, worker }),
             Err(_) => self.error = Some("catalog worker unavailable".into()),
@@ -779,13 +1222,22 @@ impl Worker {
         operation: impl FnOnce() -> Result<InstallPayload, String> + Send + 'static,
     ) -> bool {
         let (sender, result) = sync_channel(1);
+        let owner = thread::current();
         match thread::Builder::new()
             .name("bongocat-plugin-install".into())
             .spawn(move || {
                 let _ = sender.send(operation());
+                owner.unpark();
             }) {
             Ok(worker) => {
-                self.install_jobs.insert(id, InstallJob { result, worker });
+                self.install_jobs.insert(
+                    id,
+                    InstallJob {
+                        result,
+                        worker,
+                        reply: None,
+                    },
+                );
                 true
             }
             Err(_) => {
@@ -816,6 +1268,9 @@ impl Worker {
                 Ok(payload) => payload,
                 Err(error) => {
                     self.error = Some(error);
+                    if let Some(reply) = job.reply {
+                        self.respond(reply, Err(PluginCommandError::Operation));
+                    }
                     continue;
                 }
             };
@@ -824,16 +1279,16 @@ impl Worker {
             // Explicit installs, including reinstalls, auto-start; updates keep
             // the installed plugin's enable choice.
             let new_install = self.manager.installed_version(&offer.metadata.id).is_none();
-            if let Err(error) = self.manager.install_verified(&bytes, &offer.digest) {
-                self.error = Some(error.to_string());
-            } else if new_install && let Err(error) = self.manager.enable_plugin(&offer.metadata.id)
-            {
-                // Keep the validated package installed so enable can be retried.
-                self.error = Some(error.to_string());
-            }
-            self.initialize_plugin_input_activity(&offer.metadata.id);
-            self.last_pet_bounds = None;
-            self.last_pet_state = None;
+            self.queue_operation(
+                &offer.metadata.id,
+                PluginOperation::Install {
+                    bytes,
+                    digest: Some(offer.digest),
+                    enable: new_install,
+                },
+                job.reply,
+                AfterOperation::Installed,
+            );
         }
     }
 
@@ -856,6 +1311,7 @@ impl Worker {
         let plugin_dir = self.manager.plugin_dir().to_path_buf();
         let stop = Arc::clone(&self.catalog_stop);
         let (sender, result) = sync_channel(1);
+        let owner = thread::current();
         match thread::Builder::new()
             .name("bongocat-plugin-icons".into())
             .spawn(move || {
@@ -875,6 +1331,7 @@ impl Worker {
                     }
                 }
                 let _ = sender.send(cached);
+                owner.unpark();
             }) {
             Ok(worker) => self.icon_job = Some(IconJob { result, worker }),
             Err(_) => self.icon_prefetch_pending = false,
@@ -917,8 +1374,10 @@ impl Worker {
     fn dispatch_input_events(&mut self) {
         if let Some(source) = &mut self.input_events {
             let (events, overflow) = source.drain();
-            if !events.is_empty() {
-                self.manager.input_events(events, overflow);
+            let delta = overflow.saturating_sub(self.last_input_overflow);
+            self.last_input_overflow = overflow;
+            if !events.is_empty() || delta > 0 {
+                self.broadcast(|| PluginOperation::Input(events.clone(), delta));
             }
         }
     }
@@ -930,7 +1389,8 @@ impl Worker {
         let current = read();
         if current.advanced_since(self.last_input_activity) {
             self.last_input_activity = current;
-            self.manager.input_activity(self.now_ms(), current);
+            let now = self.now_ms();
+            self.broadcast(|| PluginOperation::Activity(now, current));
         }
     }
 
@@ -954,8 +1414,8 @@ impl Worker {
             return;
         };
         let current = read();
-        self.manager
-            .initialize_input_activity(id, self.now_ms(), current);
+        let now = self.now_ms();
+        self.signal(id, PluginOperation::Activity(now, current));
     }
 
     fn recover_plugins(&mut self) {
@@ -984,7 +1444,10 @@ impl Worker {
                 }
                 continue;
             }
-            if state != PluginState::Failed {
+            if state != PluginState::Failed
+                || self.is_installing(&id)
+                || self.pending_operations.values().any(|p| p.id == id)
+            {
                 continue;
             }
             let recovery = self.recovery.entry(id.clone()).or_insert(Recovery {
@@ -1000,12 +1463,13 @@ impl Worker {
             }
             recovery.failures += 1;
             let attempt = recovery.failures;
-            if self.manager.enable_plugin(&id).is_ok() {
-                self.initialize_plugin_input_activity(&id);
-                // Re-deliver current pet geometry and mode to the new process.
-                self.last_pet_bounds = None;
-                self.last_pet_state = None;
-            } else if attempt < DELAYS.len() {
+            self.queue_operation(
+                &id,
+                PluginOperation::Enable(true),
+                None,
+                AfterOperation::Enabled,
+            );
+            if attempt < DELAYS.len() {
                 self.recovery
                     .get_mut(&id)
                     .expect("recovery exists")
@@ -1058,7 +1522,7 @@ impl Worker {
                     version,
                     available_version,
                     update_available,
-                    installing: self.install_jobs.contains_key(&metadata.id),
+                    installing: self.is_installing(&metadata.id),
                     actions: nodes(output, |output| &output.model.nodes),
                     settings: nodes(output, |output| &output.settings.nodes),
                     errors: nodes(output, |output| &output.errors),
@@ -1087,7 +1551,7 @@ impl Worker {
                 version,
                 available_version: Some(offer.metadata.version.clone()),
                 update_available,
-                installing: self.install_jobs.contains_key(&offer.metadata.id),
+                installing: self.is_installing(&offer.metadata.id),
                 actions: Vec::new(),
                 settings: Vec::new(),
                 errors: Vec::new(),
@@ -1117,25 +1581,118 @@ impl Worker {
     }
 
     fn apply(&mut self, command: PluginCommand) {
-        let blocked = match &command {
-            PluginCommand::SetEnabled { id, .. }
-            | PluginCommand::Uninstall { id, .. }
-            | PluginCommand::ResetData { id, .. } => self.install_jobs.contains_key(id),
-            _ => false,
-        };
-        if blocked {
-            let reply = match command {
-                PluginCommand::SetEnabled { ref id, reply, .. }
-                | PluginCommand::Uninstall { ref id, reply }
-                | PluginCommand::ResetData { ref id, reply } => {
-                    debug_assert!(self.install_jobs.contains_key(id));
-                    reply
+        let command = match command {
+            PluginCommand::InstallLocal { bytes, reply } => {
+                match bongocat_plugin_manager::install::inspect_package_with_limit(
+                    &bytes,
+                    bongocat_plugin_manager::install::MAX_LOCAL_INSTALL_BYTES,
+                ) {
+                    Ok(manifest) => {
+                        // A local package can also be an update. Preserve the
+                        // existing enable choice just as catalog updates do.
+                        let new_install = self
+                            .manager
+                            .installed_version(&manifest.metadata.id)
+                            .is_none();
+                        self.queue_operation(
+                            &manifest.metadata.id,
+                            PluginOperation::Install {
+                                bytes,
+                                digest: None,
+                                enable: new_install,
+                            },
+                            Some(reply),
+                            AfterOperation::Installed,
+                        );
+                    }
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        self.respond(reply, Err(PluginCommandError::Operation));
+                    }
                 }
-                _ => unreachable!("only lifecycle commands can be blocked"),
-            };
-            self.respond(reply, Err(PluginCommandError::Operation));
-            return;
-        }
+                return;
+            }
+            PluginCommand::SetEnabled { id, enabled, reply } => {
+                self.recovery.remove(&id);
+                self.queue_operation(
+                    &id,
+                    PluginOperation::Enable(enabled),
+                    Some(reply),
+                    if enabled {
+                        AfterOperation::Enabled
+                    } else {
+                        AfterOperation::Disabled
+                    },
+                );
+                return;
+            }
+            PluginCommand::Action {
+                plugin,
+                action,
+                reply,
+            } => {
+                self.queue_operation(
+                    &plugin,
+                    PluginOperation::Action(action),
+                    Some(reply),
+                    AfterOperation::None,
+                );
+                return;
+            }
+            PluginCommand::Preview {
+                plugin,
+                key,
+                value,
+                reply,
+            } => {
+                self.queue_operation(
+                    &plugin,
+                    PluginOperation::Preview(key, value),
+                    Some(reply),
+                    AfterOperation::None,
+                );
+                return;
+            }
+            PluginCommand::Configure {
+                plugin,
+                key,
+                value,
+                reply,
+            } => {
+                self.queue_operation(
+                    &plugin,
+                    PluginOperation::Configure(key, value),
+                    Some(reply),
+                    AfterOperation::None,
+                );
+                return;
+            }
+            PluginCommand::ResetData { id, reply } => {
+                self.queue_operation(
+                    &id,
+                    PluginOperation::Reset,
+                    Some(reply),
+                    AfterOperation::Reset,
+                );
+                return;
+            }
+            PluginCommand::Uninstall { id, reply } => {
+                self.queue_operation(
+                    &id,
+                    PluginOperation::Uninstall,
+                    Some(reply),
+                    AfterOperation::Uninstalled,
+                );
+                return;
+            }
+            PluginCommand::SetLocale { locale, reply } => {
+                self.locale = Some(locale.clone());
+                self.broadcast(|| PluginOperation::Locale(locale.clone()));
+                self.respond(reply, Ok(()));
+                return;
+            }
+            command => command,
+        };
         match command {
             PluginCommand::ReadCenter { reply } => {
                 let _ = reply.respond(self.center());
@@ -1148,29 +1705,8 @@ impl Worker {
                 self.refresh_catalog();
                 let _ = reply.respond(self.center());
             }
-            PluginCommand::SetEnabled { id, enabled, reply } => {
-                // Flush activity for plugins that are already running before a
-                // newly enabled plugin receives its baseline.
-                if enabled {
-                    self.dispatch_input_events();
-                    self.dispatch_input_activity();
-                }
-                let result = self.set_enabled(&id, enabled);
-                if result.is_ok() {
-                    self.interaction_failures.remove(&id);
-                }
-                if result.is_ok() && enabled {
-                    self.initialize_plugin_input_activity(&id);
-                    self.last_pet_bounds = None;
-                    self.last_pet_state = None;
-                }
-                if result.is_ok() && !enabled {
-                    self.clear_plugin_bubbles(&id);
-                }
-                self.respond(reply, result);
-            }
             PluginCommand::InstallAvailable { id, reply } => {
-                if self.install_jobs.contains_key(&id) {
+                if self.is_installing(&id) {
                     self.respond(reply, Err(PluginCommandError::Operation));
                     return;
                 }
@@ -1203,116 +1739,22 @@ impl Worker {
                         bytes,
                     })
                 }) {
-                    self.respond(reply, Ok(()));
+                    self.install_jobs
+                        .get_mut(&id)
+                        .expect("install job started")
+                        .reply = Some(reply);
                 } else {
                     self.respond(reply, Err(PluginCommandError::Operation));
                 }
             }
-            PluginCommand::InstallLocal { bytes, reply } => {
-                if !self.install_jobs.is_empty() {
-                    self.respond(reply, Err(PluginCommandError::Operation));
-                    return;
-                }
-                self.error = None;
-                let result = match self.manager.install_local(&bytes) {
-                    Ok(installed) => {
-                        let id = installed.id;
-                        match self.manager.enable_plugin(&id) {
-                            Ok(()) => {
-                                self.initialize_plugin_input_activity(&id);
-                                self.last_pet_bounds = None;
-                                self.last_pet_state = None;
-                                Ok(())
-                            }
-                            Err(error) => {
-                                self.error = Some(error.to_string());
-                                Err(PluginCommandError::Operation)
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        self.error = Some(error.to_string());
-                        Err(PluginCommandError::Operation)
-                    }
-                };
-                self.respond(reply, result);
-            }
-            PluginCommand::Uninstall { id, reply } => {
-                let result = self
-                    .manager
-                    .uninstall(&id)
-                    .map(|_| ())
-                    .map_err(|error| operation(&error));
-                if result.is_ok() {
-                    self.interaction_failures.remove(&id);
-                    self.clear_plugin_bubbles(&id);
-                }
-                self.respond(reply, result);
-            }
-            PluginCommand::ResetData { id, reply } => {
-                self.dispatch_input_events();
-                self.dispatch_input_activity();
-                let result = self
-                    .manager
-                    .reset(&id)
-                    .map(|_| ())
-                    .map_err(|error| operation(&error));
-                self.initialize_plugin_input_activity(&id);
-                if result.is_ok() {
-                    self.clear_plugin_bubbles(&id);
-                    self.last_pet_bounds = None;
-                    self.last_pet_state = None;
-                }
-                self.respond(reply, result);
-            }
-            PluginCommand::Action {
-                plugin,
-                action,
-                reply,
-            } => {
-                let result = self
-                    .manager
-                    .action_plugin(&plugin, &action)
-                    .map_err(|error| operation(&error));
-                if result.is_ok() {
-                    self.interaction_failures.remove(&plugin);
-                }
-                self.respond(reply, result);
-            }
-            PluginCommand::Preview {
-                plugin,
-                key,
-                value,
-                reply,
-            } => {
-                let result = self
-                    .manager
-                    .preview_plugin(&plugin, &key, &value)
-                    .map_err(|error| operation(&error));
-                if result.is_ok() {
-                    self.interaction_failures.remove(&plugin);
-                }
-                self.respond(reply, result);
-            }
-            PluginCommand::Configure {
-                plugin,
-                key,
-                value,
-                reply,
-            } => {
-                let result = self.configure(&plugin, key, value);
-                if result.is_ok() {
-                    self.interaction_failures.remove(&plugin);
-                }
-                self.respond(reply, result);
-            }
-            PluginCommand::SetLocale { locale, reply } => {
-                let result = self
-                    .manager
-                    .set_locale(&locale)
-                    .map_err(|error| operation(&error));
-                self.respond(reply, result);
-            }
+            PluginCommand::SetEnabled { .. }
+            | PluginCommand::InstallLocal { .. }
+            | PluginCommand::Uninstall { .. }
+            | PluginCommand::ResetData { .. }
+            | PluginCommand::Action { .. }
+            | PluginCommand::Preview { .. }
+            | PluginCommand::Configure { .. }
+            | PluginCommand::SetLocale { .. } => unreachable!("plugin IO is routed to its actor"),
             PluginCommand::Shutdown { reply } => {
                 self.catalog_stop.store(true, Ordering::Release);
                 self.endpoint.close();
@@ -1331,6 +1773,7 @@ impl Worker {
         let _ = reply.respond(center);
     }
 
+    #[cfg(test)]
     fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), PluginCommandError> {
         if !self
             .manager
@@ -1347,29 +1790,6 @@ impl Worker {
             self.manager.disable_plugin(id)
         };
         result.map_err(|error| operation(&error))
-    }
-
-    /// Merge one declared key into a running plugin's configuration.
-    ///
-    /// The plugin owns the schema, so the value is merged with what the plugin
-    /// last published rather than replacing it: a control that edits one key must
-    /// not clear the others, and a key the plugin never declared is refused by the
-    /// plugin itself.
-    fn configure(
-        &mut self,
-        plugin: &str,
-        key: String,
-        value: ConfigValue,
-    ) -> Result<(), PluginCommandError> {
-        let mut config = self
-            .manager
-            .plugin_output(plugin)
-            .map(|output| output.config.clone())
-            .ok_or(PluginCommandError::NotFound)?;
-        config.insert(key, value);
-        self.manager
-            .configure_plugin(plugin, config)
-            .map_err(|error| operation(&error))
     }
 
     fn drain_interactions(&mut self) {
@@ -1393,9 +1813,15 @@ impl Worker {
                             _ => false,
                         }) {
                             Some(UiNode::Button { .. }) => (
-                                self.manager
-                                    .action_plugin(&interaction.plugin, &interaction.id)
-                                    .map_err(|error| operation(&error)),
+                                {
+                                    self.queue_operation(
+                                        &interaction.plugin,
+                                        PluginOperation::Action(interaction.id.clone()),
+                                        None,
+                                        AfterOperation::None,
+                                    );
+                                    Ok(())
+                                },
                                 crate::PluginInteractionFailure::Action {
                                     action: interaction.id.clone(),
                                     code: PluginCommandError::Operation,
@@ -1404,11 +1830,18 @@ impl Worker {
                             Some(UiNode::Toggle { key, value, .. }) => {
                                 let key = key.clone();
                                 (
-                                    self.configure(
-                                        &interaction.plugin,
-                                        key.clone(),
-                                        ConfigValue::Boolean(!value),
-                                    ),
+                                    {
+                                        self.queue_operation(
+                                            &interaction.plugin,
+                                            PluginOperation::Configure(
+                                                key.clone(),
+                                                ConfigValue::Boolean(!value),
+                                            ),
+                                            None,
+                                            AfterOperation::None,
+                                        );
+                                        Ok(())
+                                    },
                                     crate::PluginInteractionFailure::Configure {
                                         key,
                                         code: PluginCommandError::Operation,
@@ -1448,12 +1881,31 @@ impl Worker {
         }
         self.last_tick = elapsed;
         let now = self.now_ms();
-        self.manager.tick(now);
+        self.broadcast(|| PluginOperation::Tick(now));
     }
 
     /// Publish the plugins' current views only when their composed input changed.
     fn compose(&mut self) {
         let viewport = self.hud.viewport.latest();
+        if !self.hud_dirty
+            && self
+                .last_signature
+                .as_ref()
+                .is_some_and(|signature| signature.viewport == viewport)
+        {
+            if self.hud_last_used.elapsed() >= Duration::from_secs(30)
+                && self.last_signature.as_ref().is_some_and(|signature| {
+                    signature
+                        .frames
+                        .iter()
+                        .all(|frame| frame.view.nodes.is_empty())
+                })
+            {
+                self.compositor = None;
+            }
+            return;
+        }
+        self.hud_dirty = false;
         let frames = if viewport.is_usable() {
             self.running_frames()
         } else {
@@ -1499,15 +1951,7 @@ impl Worker {
     /// than drawn as an empty panel: its first frame arrives on the tick that
     /// follows its start.
     fn running_frames(&self) -> Vec<PluginHudFrame> {
-        self.manager
-            .list_plugins()
-            .into_iter()
-            .filter(|(_, state)| *state == PluginState::Enabled)
-            .filter_map(|(metadata, _)| {
-                let output = self.manager.plugin_output(&metadata.id)?;
-                Some(PluginHudFrame::new(metadata.id, output.model.clone()))
-            })
-            .collect()
+        self.hud_frames.values().cloned().collect()
     }
 }
 
@@ -1520,6 +1964,40 @@ fn nodes<T: Clone>(
 
 fn operation(error: &PluginManagerError) -> PluginCommandError {
     match error {
+        PluginManagerError::Registry(RegistryError::Storage(_)) => {
+            PluginCommandError::StorageFailure
+        }
+        PluginManagerError::Registry(RegistryError::Process(error))
+            if error.kind() == std::io::ErrorKind::StorageFull =>
+        {
+            PluginCommandError::StorageFailure
+        }
+        PluginManagerError::Registry(RegistryError::Process(error))
+            if error.kind() == std::io::ErrorKind::Unsupported =>
+        {
+            PluginCommandError::UnsupportedCapability
+        }
+        PluginManagerError::Registry(RegistryError::Process(error))
+            if error.kind() == std::io::ErrorKind::WouldBlock =>
+        {
+            PluginCommandError::Busy
+        }
+        PluginManagerError::Registry(RegistryError::Process(error))
+            if error.kind() == std::io::ErrorKind::TimedOut =>
+        {
+            PluginCommandError::Timeout
+        }
+        PluginManagerError::Registry(RegistryError::Process(error))
+            if error.kind() == std::io::ErrorKind::InvalidInput =>
+        {
+            PluginCommandError::InvalidConfiguration
+        }
+        PluginManagerError::Registry(RegistryError::Process(error))
+            if error.kind() == std::io::ErrorKind::InvalidData =>
+        {
+            PluginCommandError::ProtocolViolation
+        }
+        PluginManagerError::Io(_) => PluginCommandError::StorageFailure,
         PluginManagerError::Registry(RegistryError::NotFound(_)) => PluginCommandError::NotFound,
         PluginManagerError::Registry(RegistryError::NotRunning(_)) => {
             PluginCommandError::NotRunning
@@ -1531,6 +2009,62 @@ fn operation(error: &PluginManagerError) -> PluginCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_service_has_no_periodic_deadline() {
+        let store = tempfile::tempdir().unwrap();
+        let worker = test_worker(&store);
+        assert_eq!(worker.next_wait(), None);
+    }
+
+    #[test]
+    fn projection_changes_invalidate_only_the_affected_display() {
+        let store = tempfile::tempdir().unwrap();
+        let mut worker = test_worker(&store);
+        let id = "com.example.regions";
+        let mut projection = bongocat_plugin_manager::PluginProjection {
+            metadata: bongocat_plugin_sdk::PluginMetadata {
+                id: id.into(),
+                name: "Regions".into(),
+                description: "fixture".into(),
+                version: "1.0.0".into(),
+                app_versions: ">=2.3.1".into(),
+                protocol_version: 1,
+                entry: "fixture".into(),
+                icon: bongocat_plugin_sdk::PluginIcon::Emoji("X".into()),
+                capabilities: vec![],
+                localizations: Default::default(),
+            },
+            state: PluginState::Enabled,
+            enabled: true,
+            output: Arc::new(PluginOutput::default()),
+        };
+        worker.apply_projection(id, Some(projection.clone()));
+        worker.hud_dirty = false;
+        worker.companion_dirty = false;
+        Arc::make_mut(&mut projection.output)
+            .config
+            .insert("enabled".into(), ConfigValue::Boolean(true));
+        worker.apply_projection(id, Some(projection.clone()));
+        assert!(!worker.hud_dirty && !worker.companion_dirty);
+        Arc::make_mut(&mut projection.output)
+            .menu
+            .push(bongocat_plugin_sdk::PluginMenuItem {
+                id: "open".into(),
+                label: "Open".into(),
+            });
+        worker.apply_projection(id, Some(projection.clone()));
+        assert!(!worker.hud_dirty && worker.companion_dirty);
+        worker.companion_dirty = false;
+        Arc::make_mut(&mut projection.output)
+            .model
+            .nodes
+            .push(UiNode::Text {
+                text: "Changed".into(),
+            });
+        worker.apply_projection(id, Some(projection));
+        assert!(worker.hud_dirty && !worker.companion_dirty);
+    }
 
     #[test]
     fn failed_enabled_plugin_retries_at_most_three_times_and_can_be_disabled() {
@@ -1564,7 +2098,10 @@ mod tests {
         zip.start_file(executable, options).unwrap();
         zip.write_all(b"not an executable").unwrap();
         let package = zip.finish().unwrap().into_inner();
-        worker.manager.install_local(&package).unwrap();
+        let installed = worker.manager.install_local(&package).unwrap();
+        // A missing executable fails deterministically without asking Windows to
+        // start invalid bytes, which may open an interactive system error dialog.
+        std::fs::remove_file(installed.root.join(executable)).unwrap();
         assert!(worker.set_enabled(id, true).is_err());
         assert!(
             worker
@@ -1579,21 +2116,46 @@ mod tests {
         for attempt in 1..=3 {
             worker.recovery.get_mut(id).unwrap().next_attempt = Instant::now();
             worker.recover_plugins();
+            settle(&mut worker);
             assert_eq!(worker.recovery[id].failures, attempt);
         }
         worker.recover_plugins();
         assert_eq!(worker.recovery[id].failures, 3);
-        worker.set_enabled(id, false).unwrap();
+        worker.queue_operation(
+            id,
+            PluginOperation::Enable(false),
+            None,
+            AfterOperation::Disabled,
+        );
+        worker.recovery.remove(id);
+        settle(&mut worker);
         assert!(!worker.manager.plugin_is_enabled(id));
         assert!(!worker.recovery.contains_key(id));
+    }
+
+    fn settle(worker: &mut Worker) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !worker.pending_operations.is_empty() {
+            assert!(Instant::now() < deadline, "plugin jobs must complete");
+            worker.finish_actor_work();
+            thread::park_timeout(Duration::from_millis(5));
+        }
     }
 
     fn test_worker(store: &tempfile::TempDir) -> Worker {
         let (_, endpoint) = PluginServiceClient::bounded(4);
         let (hud_producer, _) = latest_hud_channel();
         let (_, viewport) = latest_viewport_channel();
-        let (_, interactions) = sync_channel(4);
+        let (_, interactions) = bongocat_plugin_hud::waking_channel(4);
         Worker {
+            hud_dirty: true,
+            companion_dirty: true,
+            actors: BTreeMap::new(),
+            retiring: Vec::new(),
+            hud_frames: BTreeMap::new(),
+            pending_operations: BTreeMap::new(),
+            next_operation: 0,
+            locale: None,
             manager: PluginManager::new(store.path().to_path_buf()).unwrap(),
             source: PluginSource::InstalledOnly,
             offers: Vec::new(),
@@ -1604,6 +2166,7 @@ mod tests {
             catalog_stop: Arc::default(),
             input_activity: None,
             last_input_activity: InputActivity::default(),
+            last_input_overflow: 0,
             input_events: None,
             endpoint,
             hud: OverlaySinks {
@@ -1730,6 +2293,7 @@ mod tests {
             id: "com.bongocat.other".into(),
             reply: PluginReply(reply),
         });
+        settle(&mut worker);
         assert!(response.recv_blocking().unwrap().is_ok());
         release.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);

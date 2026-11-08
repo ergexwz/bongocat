@@ -48,6 +48,7 @@ fn frame_smoke_rejects_missing_coverage_and_color_variation() {
 
 #[test]
 fn temporary_drawable_failures_back_off_without_accumulating_error_reports() {
+    assert_eq!(OverlayTickOutcome::Unchanged.retry_after(), None);
     let mut backoff = FrameRetryBackoff::default();
     let delays = (0..6)
         .map(|_| backoff.register_temporary_failure())

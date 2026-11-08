@@ -35,7 +35,8 @@ pub(crate) struct ProductOverlaySession {
     /// plugin host looks like.
     pub(crate) hud_consumer: Option<HudConsumer>,
     /// Where a click on a plugin's control is reported.
-    pub(crate) hud_interaction_sender: Option<SyncSender<OverlayPluginInteraction>>,
+    pub(crate) hud_interaction_sender:
+        Option<bongocat_plugin_hud::WakingSender<OverlayPluginInteraction>>,
     /// Where the panel's own size and backing scale are reported, so the plugin
     /// service composes a layer that matches the window it will be drawn into.
     pub(crate) hud_viewport_reporter: Option<HudViewportReporter>,
@@ -739,6 +740,8 @@ impl ProductOverlaySession {
             || bounds_inside_screens(&screen_bounds_all(mtm)?, bounds);
         Ok(ProductOverlayReport {
             frames_presented: self.frames_presented,
+            frames_skipped: 0,
+            frame_timing: None,
             placement_fully_visible,
             dynamic_snapshots: self.dynamic_snapshots,
             model_commit_rejections: self.model_commit_rejections,

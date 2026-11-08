@@ -248,7 +248,7 @@ impl PluginSource {
                 let catalog = catalog::fetch_catalog_blocking(owner, repository, public_key, stop)
                     .map_err(|error| error.to_string())?;
                 for entry in catalog.plugins {
-                    if entry.protocol_version != bongocat_plugin_sdk::PROTOCOL_VERSION {
+                    if !bongocat_plugin_sdk::supports_protocol(entry.protocol_version) {
                         continue;
                     }
                     let Some(url) = entry.downloads.get(platform) else {
@@ -360,6 +360,9 @@ fn select_candidates(
     let app = Version::parse(app).map_err(|error| error.to_string())?;
     let mut newest: BTreeMap<String, (Version, AvailablePlugin)> = BTreeMap::new();
     for candidate in candidates {
+        if !bongocat_plugin_sdk::supports_protocol(candidate.metadata.protocol_version) {
+            continue;
+        }
         if !VersionReq::parse(&candidate.metadata.app_versions).is_ok_and(|req| req.matches(&app)) {
             continue;
         }

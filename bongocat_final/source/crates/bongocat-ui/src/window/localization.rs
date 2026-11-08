@@ -245,42 +245,26 @@ pub(super) fn plugin_failure_message(
             )
         }
     };
-    match report.code {
-        PluginCommandError::ServiceUnavailable => bongocat_i18n::format_text(
-            locale,
-            "plugins.errors.with_reason",
-            &[
-                ("message", message),
-                (
-                    "reason",
-                    bongocat_i18n::text(locale, "plugins.errors.service_unavailable").to_owned(),
-                ),
-            ],
-        ),
-        PluginCommandError::NotFound => bongocat_i18n::format_text(
-            locale,
-            "plugins.errors.with_reason",
-            &[
-                ("message", message),
-                (
-                    "reason",
-                    bongocat_i18n::text(locale, "plugins.errors.not_installed").to_owned(),
-                ),
-            ],
-        ),
-        PluginCommandError::NotRunning => bongocat_i18n::format_text(
-            locale,
-            "plugins.errors.with_reason",
-            &[
-                ("message", message),
-                (
-                    "reason",
-                    bongocat_i18n::text(locale, "plugins.errors.not_running").to_owned(),
-                ),
-            ],
-        ),
-        PluginCommandError::Operation => message,
-    }
+    let reason = match report.code {
+        PluginCommandError::ServiceUnavailable => "plugins.errors.service_unavailable",
+        PluginCommandError::NotFound => "plugins.errors.not_installed",
+        PluginCommandError::NotRunning => "plugins.errors.not_running",
+        PluginCommandError::Operation => return message,
+        PluginCommandError::Busy => "plugins.errors.busy",
+        PluginCommandError::Timeout => "plugins.errors.timeout",
+        PluginCommandError::InvalidConfiguration => "plugins.errors.invalid_configuration",
+        PluginCommandError::StorageFailure => "plugins.errors.storage_failure",
+        PluginCommandError::UnsupportedCapability => "plugins.errors.unsupported_capability",
+        PluginCommandError::ProtocolViolation => "plugins.errors.protocol_violation",
+    };
+    bongocat_i18n::format_text(
+        locale,
+        "plugins.errors.with_reason",
+        &[
+            ("message", message),
+            ("reason", bongocat_i18n::text(locale, reason).to_owned()),
+        ],
+    )
 }
 
 /// The notification slot one failure belongs to.

@@ -1,13 +1,15 @@
 //! Discovery and lifecycle management for independently distributed plugins.
 #![forbid(unsafe_code)]
+mod actor;
 mod catalog;
 mod icons;
 mod loader;
 mod registry;
+pub use actor::{PluginActor, PluginCompletion, PluginDiagnostics, PluginOperation};
 mod source;
 use bongocat_plugin_sdk::PluginMetadata;
 pub use catalog::{CATALOG_NAME, Catalog, CatalogEntry, CatalogError, parse_catalog, sha256_of};
-pub use registry::{PluginRegistry, PluginState, RegistryError};
+pub use registry::{PluginProjection, PluginRegistry, PluginState, RegistryError};
 use serde::{Deserialize, Serialize};
 pub use source::{
     AvailablePlugin, PluginSource, is_newer, verified_bundled_plugins,
@@ -59,6 +61,20 @@ pub struct PluginManager {
     plugin_dir: PathBuf,
 }
 impl PluginManager {
+    /// Transfer the runtime owner to a dedicated worker, retaining a read-only projection.
+    pub fn spawn_actor(&mut self, id: &str) -> std::io::Result<PluginActor> {
+        let manager = Self {
+            registry: self.registry.detach(id),
+            plugin_dir: self.plugin_dir.clone(),
+            retire_legacy: self.retire_legacy,
+        };
+        PluginActor::start(id.to_owned(), manager)
+    }
+
+    pub fn apply_projection(&mut self, id: &str, projection: Option<PluginProjection>) {
+        self.registry
+            .apply_projection(id, projection, &self.plugin_dir);
+    }
     pub fn new(plugin_dir: PathBuf) -> Result<Self, PluginManagerError> {
         fs::create_dir_all(&plugin_dir)?;
         Ok(Self {
@@ -66,6 +82,12 @@ impl PluginManager {
             retire_legacy: false,
             plugin_dir,
         })
+    }
+    pub fn mark_actor_failed(&mut self, id: &str) {
+        if let Some(mut projection) = self.registry.projection(id) {
+            projection.state = PluginState::Failed;
+            self.apply_projection(id, Some(projection));
+        }
     }
     pub fn retire_legacy_plugins(&mut self) {
         self.retire_legacy = true;
@@ -144,6 +166,16 @@ impl PluginManager {
         if running {
             self.registry.suspend(id)?;
         }
+        let session_path = self
+            .plugin_dir
+            .join(DATA_DIRECTORY)
+            .join(id)
+            .join("session.json");
+        let previous_session = match install::read_bounded(&session_path, 512 * 1024) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
         let result =
             install::install_package_with_limit(&self.plugin_dir, expected_sha256, bytes, limit);
         let installed = match result {
@@ -168,12 +200,14 @@ impl PluginManager {
             if let Some(previous) = previous {
                 let package_root = self.plugin_dir.join(PACKAGES_DIRECTORY).join(id);
                 install::write_current(&package_root, &previous)?;
+                restore_session(&session_path, previous_session.as_deref())?;
                 self.register_installed(id, &package_root.join(previous))?;
                 if running {
                     self.registry.enable(id)?;
                 }
             } else {
                 install::uninstall_package(&self.plugin_dir, id)?;
+                restore_session(&session_path, previous_session.as_deref())?;
             }
             return Err(error);
         }
@@ -406,7 +440,11 @@ impl PluginManager {
         self.registry.collect_updates();
     }
     pub fn tick(&mut self, elapsed_ms: u64) -> Vec<(String, bongocat_plugin_sdk::PluginOutput)> {
-        self.registry.tick(elapsed_ms)
+        self.registry
+            .tick(elapsed_ms)
+            .into_iter()
+            .map(|(id, output)| (id, output.as_ref().clone()))
+            .collect()
     }
     pub fn plugin_output(&self, id: &str) -> Option<&bongocat_plugin_sdk::PluginOutput> {
         self.registry.output(id)
@@ -415,6 +453,25 @@ impl PluginManager {
         self.registry.shutdown().map_err(Into::into)
     }
 }
+fn restore_session(path: &Path, bytes: Option<&[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(bytes) = bytes {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = atomic_write_file::AtomicWriteFile::options().open(path)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.commit()
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 fn supports_application(metadata: &PluginMetadata) -> bool {
     use cargo_packager_updater::semver::{Version, VersionReq};
     VersionReq::parse(&metadata.app_versions).is_ok_and(|range| {

@@ -1,0 +1,20 @@
+{
+  "metadata": {
+    "id": "com.example.scheduled-timer",
+    "name": "Scheduled timer",
+    "description": "Runnable protocol v2 SDK example.",
+    "version": "1.0.0",
+    "app_versions": ">=2.5.4",
+    "protocol_version": 2,
+    "entry": "scheduled_timer",
+    "icon": {
+      "type": "emoji",
+      "value": "X"
+    },
+    "capabilities": [
+      "model_ui",
+      "persistent_state"
+    ],
+    "localizations": {}
+  }
+}

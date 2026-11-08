@@ -316,6 +316,20 @@ fn priority_weight(priority: &str) -> u8 {
 }
 
 impl CompanionState for TodoState {
+    fn next_wake_ms(&self) -> Option<u64> {
+        let now = now_ms();
+        self.tasks
+            .iter()
+            .filter(|task| !task.completed && task.due_date != task.notified_due_at)
+            .filter_map(|task| task.due_date)
+            .min()
+            .map(|due| {
+                (due.max(self.last_due_check.saturating_add(DUE_CHECK_MS))
+                    .saturating_sub(now))
+                .clamp(34, 86_400_000) as u64
+            })
+    }
+
     fn id(&self) -> &'static str {
         "com.bongocat.todo"
     }

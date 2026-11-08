@@ -21,14 +21,14 @@ pub struct PluginHudFrame {
     /// The plugin id the frame belongs to. This is the only thing the host needs
     /// to know about a frame's origin, so composition stays plugin-agnostic.
     pub plugin: String,
-    pub view: PluginView,
+    pub view: std::sync::Arc<PluginView>,
 }
 
 impl PluginHudFrame {
     pub fn new(plugin: impl Into<String>, view: PluginView) -> Self {
         Self {
             plugin: plugin.into(),
-            view,
+            view: std::sync::Arc::new(view),
         }
     }
 }
@@ -467,6 +467,7 @@ pub fn latest_hud_channel() -> (HudProducer, HudConsumer) {
 /// a queue: a size the window has since left is not worth composing a frame for.
 #[derive(Clone)]
 pub struct HudViewportReporter {
+    wake: crate::WorkerWake,
     slot: Arc<Mutex<HudViewport>>,
 }
 
@@ -477,17 +478,24 @@ impl HudViewportReporter {
             .slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *slot = viewport;
+        if *slot != viewport {
+            *slot = viewport;
+            self.wake.wake();
+        }
     }
 }
 
 /// The plugin-service half of the viewport channel.
 #[derive(Clone)]
 pub struct HudViewportReader {
+    wake: crate::WorkerWake,
     slot: Arc<Mutex<HudViewport>>,
 }
 
 impl HudViewportReader {
+    pub fn set_waker(&self, thread: std::thread::Thread) {
+        self.wake.bind(thread);
+    }
     /// The most recent window report, or a viewport that composes nothing.
     pub fn latest(&self) -> HudViewport {
         *self
@@ -500,11 +508,13 @@ impl HudViewportReader {
 /// A latest-value channel carrying the model window's size and backing scale.
 pub fn latest_viewport_channel() -> (HudViewportReporter, HudViewportReader) {
     let slot = Arc::new(Mutex::new(HudViewport::unusable()));
+    let wake = crate::WorkerWake::default();
     (
         HudViewportReporter {
+            wake: wake.clone(),
             slot: Arc::clone(&slot),
         },
-        HudViewportReader { slot },
+        HudViewportReader { slot, wake },
     )
 }
 

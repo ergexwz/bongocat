@@ -24,6 +24,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
+mod protocol_v2;
+pub use protocol_v2::run_host_v2;
 
 /// Called on the dedicated window worker. WebView2 creation must not block a
 /// synchronous Tauri event handler or the host protocol's bounded response.
@@ -64,9 +66,12 @@ pub enum UiEvent {
 /// The thread-safe bridge from the protocol thread to the Tauri event loop.
 #[derive(Clone, Default)]
 pub struct UiBridge {
+    protocol_waker: Arc<Mutex<Option<thread::Thread>>>,
+    protocol_dirty: Arc<AtomicBool>,
     app: Arc<Mutex<Option<AppHandle>>>,
     pending: Arc<Mutex<Vec<UiEvent>>>,
     stop: Arc<AtomicBool>,
+    stop_signal: Arc<(Mutex<bool>, std::sync::Condvar)>,
     window_work: Arc<Mutex<Option<SyncSender<WindowTask>>>>,
     open_windows: Arc<Mutex<std::collections::BTreeSet<String>>>,
 }
@@ -88,10 +93,9 @@ impl UiBridge {
             .name("companion-windows".into())
             .spawn(move || {
                 while !stop_requested.load(Ordering::Acquire) {
-                    match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+                    match receiver.recv() {
                         Ok(task) => task(&handle),
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(_) => break,
                     }
                 }
             })
@@ -118,22 +122,42 @@ impl UiBridge {
         let mut stop = false;
         for event in pending {
             stop |= matches!(event, UiEvent::Stop);
-            self.deliver_ui_event(&app, event);
+            self.deliver_ui_event(event);
         }
         stop
     }
 
     pub fn emit(&self, event: UiEvent) {
+        if matches!(event, UiEvent::StateChanged) {
+            self.protocol_dirty.store(true, Ordering::Release);
+            if let Some(worker) = self
+                .protocol_waker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+            {
+                worker.unpark();
+            }
+        }
         if matches!(event, UiEvent::Stop) {
             self.stop.store(true, Ordering::Release);
+            let (stopped, signal) = &*self.stop_signal;
+            *stopped
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            signal.notify_all();
+            self.window_work
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
         }
         let slot = self
             .app
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(app) = slot.clone() {
+        if slot.is_some() {
             drop(slot);
-            self.deliver_ui_event(&app, event);
+            self.deliver_ui_event(event);
         } else {
             let mut pending = self
                 .pending
@@ -180,22 +204,38 @@ impl UiBridge {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(label)
     }
-    fn deliver_ui_event(&self, app: &AppHandle, event: UiEvent) {
+    fn deliver_ui_event(&self, event: UiEvent) {
         let label = match &event {
             UiEvent::Open { kind } => Some(kind.clone()),
             UiEvent::Bubble { .. } => Some("bubble".to_owned()),
             _ => None,
         };
-        if let Some(label) = label {
-            self.set_window_open(&label, true);
-            let _ = self.dispatch_window(move |app| {
-                if ensure_window(app, &label).is_ok() {
-                    let _ = app.emit(EVENT_NAME, event);
-                }
-            });
-        } else {
-            let _ = app.emit(EVENT_NAME, event);
+        if let Some(label) = &label {
+            self.set_window_open(label, true);
         }
+        // Emitting also reads Tauri's window registry. A WebView builder can
+        // hold that registry while waiting for the UI thread, so every UI hint
+        // follows the window worker instead of blocking the protocol owner.
+        let _ = self.dispatch_window(move |app| {
+            if label
+                .as_ref()
+                .is_none_or(|label| ensure_window(app, label).is_ok())
+            {
+                let _ = app.emit(EVENT_NAME, event);
+            }
+        });
+    }
+
+    pub fn wait_for_stop(&self) {
+        let (stopped, signal) = &*self.stop_signal;
+        let guard = stopped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(
+            signal
+                .wait_while(guard, |stopped| !*stopped)
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
 
     pub fn stop_requested(&self) -> bool {
@@ -217,6 +257,20 @@ impl UiBridge {
 
 /// The business surface one companion plugin exposes to the host protocol.
 pub trait CompanionState: Send + 'static {
+    fn event_acknowledged(&mut self, _id: &str) {}
+    fn checkpoint_committed(&mut self, _revision: u64) {}
+    fn subscriptions(&self) -> bongocat_plugin_sdk::v2::Subscriptions {
+        bongocat_plugin_sdk::v2::Subscriptions {
+            input_activity: true,
+            input_events: false,
+            pet_state: true,
+            pet_bounds: true,
+        }
+    }
+    /// Relative monotonic wake request. None means event-driven until state changes.
+    fn next_wake_ms(&self) -> Option<u64> {
+        None
+    }
     fn id(&self) -> &'static str;
     fn start(&mut self, config: Configuration, state: Vec<u8>) -> Result<PluginOutput, String>;
     fn tick(&mut self, elapsed_ms: u64) -> Result<PluginOutput, String>;
@@ -331,6 +385,16 @@ fn handle_message<S: CompanionState>(
             }
         }
         message if *ready => match message {
+            HostMessage::Restore {
+                config,
+                state: bytes,
+                schema_version,
+            } => {
+                if schema_version > 1 {
+                    return Err("unsupported checkpoint schema".into());
+                }
+                state.start(config, bytes)
+            }
             HostMessage::Start {
                 config,
                 state: bytes,

@@ -11,6 +11,12 @@ The plugins are separate native processes. They speak the versioned
 The BongoCat host only supplies plugin lifecycle, a companion menu, pet
 coordinates, local ZIP installation and storage paths.
 
+The current source packages use protocol v2 and package version 0.2.1 (host 2.5.4 or newer). See the
+[SDK guide](crates/bongocat-plugin-sdk/README.md) for negotiated capabilities,
+scheduled wakes, checkpoint migrations and standalone examples. Existing v1
+packages in the distribution directories remain compatibility fixtures; rebuilding
+source does not publish or replace those historical packages.
+
 Cyber Work needs the host build in this repository: it declares
 `pet_state_v1` and `plugin_menu_tree_v1`, which the earlier 2.5.0 executable did
 not expose. It shows the counter only for the built-in `standard` and `gamepad`

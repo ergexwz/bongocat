@@ -21,7 +21,7 @@ supported by repeatable verification.
 BongoCat is developed on Windows and macOS. Linux is not a release target and is not required for
 routine validation.
 
-Install `rustup` (the repository pins the required toolchain), `just`, and Python 3. Run all commands
+Install `rustup` (the repository pins the required toolchain), `just`, and Python 3.11 or newer. Run all commands
 from the repository root:
 
 ```text
@@ -31,111 +31,21 @@ just build
 just schema
 ```
 
-`just dev` and `just dev-smoke` also prepare the official plugins. They use the
-checkout named by `BONGOCAT_PLUGINS_ROOT`, or clone
-`https://github.com/ayangweb/BongoCat-Plugins` under `target/plugin-dev` on the
-first run and check out the SDK revision pinned in `Cargo.toml`, build only the
-current host target, and start the application with the generated local
-catalog. The automatic checkout must stay clean. Set the variable to work
-against an existing plugin checkout, including uncommitted plugin changes:
+`just dev`, `just dev-smoke`, and `just plugin-tests` prepare the official plugins. They use `BONGOCAT_PLUGINS_ROOT` when set, otherwise the local plugin workspace containing the SDK referenced by `Cargo.toml`. When the SDK is pinned to Git instead, the development tool can prepare the pinned checkout under `target/plugin-dev`.
+
+For the local workspace, install Node.js and each plugin's frontend dependencies before building. The tool rebuilds the frontends and plugin binaries for the current host and creates a Development catalog. It does not install packages into the user's Production data. On Windows, development and test launches also isolate each companion's WebView2 cache beside its installed executable. An explicit plugin workspace can contain uncommitted changes:
 
 ```text
-BONGOCAT_PLUGINS_ROOT=/path/to/BongoCat-Plugins just dev
+BONGOCAT_PLUGINS_ROOT=/path/to/plugin-workspace just plugin-tests
 ```
 
-Use `just plugin-tests` to run the workspace tests with the same plugin checkout
-and real-capable plugin binaries. Without that command, tests that need the
-independent checkout skip; this is useful for lightweight local checks but is
-not the full plugin lifecycle verification. Set `BONGOCAT_PLUGINS_ROOT` to the
-same checkout when testing uncommitted plugin changes.
+The local lifecycle test requires Todo, Mail, and Cyber Work and fails if any package is missing. Older Pomodoro-specific tests require a separate checkout containing that plugin; they are not covered by the local workspace test. SDK and protocol changes must be verified against both the host and the local plugin workspace. This workflow does not sign or publish plugins.
 
-The plugin build requires the same Rust toolchain and `just`; the orchestration
-script requires Python 3 and Git. No plugin release, plugin signing key, or
-application release is involved.
-
-### Plugin repository and joint debugging
-
-Official plugins and the plugin SDK are maintained in the independent
-[`BongoCat-Plugins`](https://github.com/ayangweb/BongoCat-Plugins) repository.
-When changing only plugin behavior, plugin UI, or plugin business logic, create a
-branch and pull request in that repository. Do not copy plugin source back into
-this repository, and do not update this repository's SDK revision.
-
-Maintainers with write access may clone `ayangweb/BongoCat-Plugins` directly.
-Other developers must first fork `BongoCat-Plugins` on GitHub, clone their fork,
-and add the upstream repository as a remote:
-
-```text
-git clone https://github.com/<your-name>/BongoCat-Plugins.git
-cd BongoCat-Plugins
-git remote add upstream https://github.com/ayangweb/BongoCat-Plugins.git
-git fetch upstream
-git switch -c fix/plugin-topic upstream/master
-```
-
-After validating the change, push the branch to the fork and open a pull request
-against the upstream repository:
-
-```text
-git push -u origin fix/plugin-topic
-```
-
-On GitHub, open a pull request from `<your-name>:fix/plugin-topic` to
-`ayangweb/BongoCat-Plugins:master`. Do not push commits directly to the upstream
-repository or use a pull request to modify upstream `master`.
-
-The application repository follows the same access rules: maintainers may clone
-the upstream directly, while other developers must fork `ayangweb/BongoCat`,
-branch from upstream `master`, push to their fork, and open a pull request
-against the upstream repository.
-
-#### Plugin-only changes
-
-These changes do not require modifying application dependencies. Point the
-application's plugin path at your plugin fork checkout to develop and run the
-full plugin tests with uncommitted plugin changes:
-
-```text
-BONGOCAT_PLUGINS_ROOT=/path/to/BongoCat-Plugins just dev
-BONGOCAT_PLUGINS_ROOT=/path/to/BongoCat-Plugins just plugin-tests
-```
-
-An explicitly named plugin checkout may contain uncommitted changes. The
-automatic `target/plugin-dev/BongoCat-Plugins` checkout managed by `just dev`
-must stay clean and remains pinned to the SDK revision declared in `Cargo.toml`.
-
-#### SDK, protocol, or host-interface changes
-
-These changes affect both repositories and require two pull requests, with the
-plugin-repository change merged first. Until the plugin pull request is merged,
-you may temporarily point the application's SDK dependency at the local plugin
-checkout to verify that both sides agree on the protocol:
-
-```toml
-[workspace.dependencies]
-bongocat-plugin-sdk = { path = "../BongoCat-Plugins/crates/bongocat-plugin-sdk" }
-```
-
-The path above is an example relative to the application repository; adjust it
-for your checkout. You may also temporarily use a full commit from your fork.
-Such dependency changes and the corresponding `Cargo.lock` changes are for local
-integration testing only and must not be committed to the application pull
-request.
-
-After the plugin-repository change is merged, restore the dependency to the
-upstream repository and pin `rev` to the merged full 40-character commit SHA:
-
-```toml
-[workspace.dependencies]
-bongocat-plugin-sdk = { git = "https://github.com/ayangweb/BongoCat-Plugins", rev = "<full-upstream-commit-sha>" }
-```
-
-Then run `cargo update --workspace` to synchronize `Cargo.lock`, run `just check`,
-and run `just plugin-tests` against the merged plugin checkout. The application
-must not merge a commit from a contributor's fork; it must use a full revision
-merged in the upstream repository. The application consumes the SDK through a
-Git revision, so this step does not require a plugin Tag or Release; plugin
-releases remain independent in the plugin repository.
+The SDK's [plugin author guide](../../bongocat_plugins/crates/bongocat-plugin-sdk/README.md)
+documents negotiated capabilities, event acknowledgements, checkpoints and requested wakeups.
+`just plugin-tests` also builds and runs the standalone SDK examples. Resource comparison and
+long-run validation use `tools/prepare_performance_baseline.py` and
+`tools/measure-plugin-performance.ps1`; record their scope and results under `docs/benchmark`.
 
 When building on Windows, ensure you use the MSVC toolchain (of the form
 `stable-x86_64-pc-windows-**msvc**`, not `stable-x86_64-pc-windows-**gnu**`). This project depends

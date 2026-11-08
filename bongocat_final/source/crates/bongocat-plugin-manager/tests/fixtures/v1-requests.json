@@ -1,0 +1,8 @@
+[
+  {"sequence":1,"message":{"type":"handshake","protocol_version":1,"id":"com.example.host-fixture"}},
+  {"sequence":2,"message":{"type":"start","config":{},"state":[]}},
+  {"sequence":3,"message":{"type":"tick","elapsed_ms":200}},
+  {"sequence":4,"message":{"type":"action","id":"toggle"}},
+  {"sequence":5,"message":{"type":"input_events","events":[],"overflow":1}},
+  {"sequence":6,"message":{"type":"stop"}}
+]

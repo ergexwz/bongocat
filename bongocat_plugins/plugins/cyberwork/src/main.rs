@@ -2,7 +2,7 @@
 
 mod cyberwork;
 
-use bongocat_companion::{UiBridge, data_dir, ensure_data_dir, run_host};
+use bongocat_companion::{UiBridge, data_dir, ensure_data_dir, run_host_v2};
 use cyberwork::{AppState, CyberWorkState};
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ fn main() {
     let _ = ensure_data_dir(&directory);
     let ui = UiBridge::new();
     let state = CyberWorkState::load(&directory, ui.clone());
-    run_host(Arc::clone(&state), ui.clone());
+    run_host_v2(Arc::clone(&state), ui.clone());
 
     let app_state = AppState { state };
 
@@ -35,11 +35,8 @@ fn main() {
             std::thread::Builder::new()
                 .name("bongocat-cyberwork-stop".to_owned())
                 .spawn(move || {
-                    while !watcher.stop_requested() {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    let exit = handle.clone();
-                    let _ = handle.run_on_main_thread(move || exit.exit(0));
+                    watcher.wait_for_stop();
+                    handle.exit(0);
                 })?;
             Ok(())
         })

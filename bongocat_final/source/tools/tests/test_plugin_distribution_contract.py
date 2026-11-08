@@ -1,13 +1,8 @@
-"""Keep official plugin distribution outside the application repository.
-
-Plugin SDK and official plugins are built, signed and released by
-`ayangweb/BongoCat-Plugins`. The application only hosts plugins and pins the SDK,
-so a copied plugin source or an application-owned plugin release workflow would
-silently reintroduce the coupling the split removes.
-"""
+"""Check the local SDK dependency and plugin distribution boundaries."""
 
 import base64
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -53,26 +48,11 @@ def application_signing_key():
 
 
 class PluginDistributionContractTests(unittest.TestCase):
-    def test_the_sdk_is_pinned_to_a_plugin_repository_revision(self):
-        source = read(WORKSPACE)
-        dependency = re.search(
-            r'^bongocat-plugin-sdk\s*=\s*\{([^}]*)\}\s*$',
-            source,
-            re.MULTILINE,
-        )
-        self.assertIsNotNone(dependency, "the workspace must depend on the plugin SDK")
-        fields = dict(
-            re.findall(r'(\w+)\s*=\s*"([^"]+)"', dependency.group(1))
-        )
-        self.assertEqual(
-            fields.get("git"), "https://github.com/ayangweb/BongoCat-Plugins"
-        )
-        self.assertRegex(
-            fields.get("rev", ""),
-            r"^[0-9a-f]{40}$",
-            "the SDK must be pinned to a full Git commit rather than a branch or tag",
-        )
-        self.assertNotIn("path", fields)
+    def test_the_sdk_resolves_to_the_local_plugin_workspace(self):
+        manifest = tomllib.loads(read(WORKSPACE))
+        sdk = manifest["workspace"]["dependencies"]["bongocat-plugin-sdk"]
+        self.assertEqual(sdk, {"path": "../../bongocat_plugins/crates/bongocat-plugin-sdk"})
+        self.assertTrue((ROOT / sdk["path"] / "Cargo.toml").is_file())
 
     def test_no_official_plugin_source_or_release_pipeline_is_copied_back(self):
         self.assertFalse((ROOT / "plugins").exists())
@@ -126,7 +106,7 @@ class PluginDistributionContractTests(unittest.TestCase):
     def test_development_entry_points_prepare_a_local_catalog(self):
         justfile = read(JUSTFILE)
         self.assertIn(
-            "python3tools/dev_plugins.py--cargorun--locked-pbongocat-app--release",
+            "{{python}}tools/dev_plugins.py--cargorun--locked-pbongocat-app--release",
             "".join(justfile.split()),
         )
         script = read(DEV_PLUGINS)

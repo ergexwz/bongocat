@@ -10,6 +10,8 @@ use super::*;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductOverlayReport {
     pub frames_presented: u64,
+    pub frames_skipped: u64,
+    pub frame_timing: Option<FrameTimingSummary>,
     /// Whether the overlay window was fully on a display when the session
     /// finished, or the constraint was off. A window that is still waiting out
     /// its settle delay after a drag is reported as `false`.
@@ -28,6 +30,7 @@ pub struct ProductOverlayReport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OverlayTickOutcome {
     Presented,
+    Unchanged,
     Hidden,
     Deferred(Duration),
 }
@@ -36,7 +39,7 @@ impl OverlayTickOutcome {
     pub const fn retry_after(self) -> Option<Duration> {
         match self {
             Self::Deferred(delay) => Some(delay),
-            Self::Presented | Self::Hidden => None,
+            Self::Presented | Self::Unchanged | Self::Hidden => None,
         }
     }
 }

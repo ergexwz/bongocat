@@ -107,10 +107,14 @@ impl Renderer {
         window: &OverlayWindow,
         frame: &RenderFrame,
         options: OverlaySessionOptions,
+        previous: Option<&Self>,
     ) -> Result<Self, OverlayError> {
+        if let Some(previous) = previous {
+            previous.assert_owner_thread();
+        }
         // SAFETY: all interfaces and resources are created for one live HWND
         // and remain confined to the current ProductOverlaySession thread.
-        unsafe { Self::create_inner(window, frame, options) }
+        unsafe { Self::create_inner(window, frame, options, previous) }
             .map_err(windows_error("create D3D11 renderer"))
     }
 
@@ -118,8 +122,22 @@ impl Renderer {
         window: &OverlayWindow,
         frame: &RenderFrame,
         options: OverlaySessionOptions,
+        previous: Option<&Self>,
     ) -> WindowsResult<Self> {
-        let (device, context) = unsafe { create_d3d11_device()? };
+        // A replacement HWND needs its own buffers and composition target, but
+        // not a new GPU device. Besides repeated initialization work, shader
+        // initialization on fresh devices can retain process-lifetime cache
+        // handles (measured on the Windows acceptance machine).
+        // Keep one device/context for the session; candidate model resources
+        // remain separate until the existing transactional switch commits.
+        let (device, context) = if let Some(previous) = previous
+            && unsafe { previous.device.GetDeviceRemovedReason() }.is_ok()
+        {
+            (previous.device.clone(), previous.context.clone())
+        } else {
+            // A removed device must be replaced after a graphics reset.
+            unsafe { create_d3d11_device()? }
+        };
         let dxgi_device: IDXGIDevice = device.cast()?;
         let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter()? };
         let memory_adapter: IDXGIAdapter3 = adapter.cast()?;

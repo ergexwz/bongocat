@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, State};
@@ -141,8 +144,8 @@ pub struct CyberWorkState {
     error: Option<String>,
     pending_history: bool,
     ui: UiBridge,
-    counter_shown: bool,
-    counter_geometry: Option<WindowGeometry>,
+    counter_shown: Arc<AtomicBool>,
+    counter_geometry: Arc<Mutex<Option<WindowGeometry>>>,
     last_counter_text: String,
     last_counter_scale: u16,
 }
@@ -214,8 +217,8 @@ impl CyberWorkState {
             error,
             pending_history: false,
             ui,
-            counter_shown: false,
-            counter_geometry: None,
+            counter_shown: Arc::default(),
+            counter_geometry: Arc::default(),
             last_counter_text: String::new(),
             last_counter_scale: DEFAULT_SCALE_PERCENT,
         }))
@@ -369,85 +372,70 @@ impl CyberWorkState {
         }
     }
 
-    fn cursor_over_pet(&self) -> bool {
-        let Some(bounds) = self.pet_bounds else {
-            return false;
-        };
-        let Some(app) = self.ui.app_handle() else {
-            return false;
-        };
-        let Ok(cursor) = app.cursor_position() else {
-            return false;
-        };
-        cursor.x >= f64::from(bounds.x)
-            && cursor.x < f64::from(bounds.x) + f64::from(bounds.width)
-            && cursor.y >= f64::from(bounds.y)
-            && cursor.y < f64::from(bounds.y) + f64::from(bounds.height)
-    }
-
-    fn invalidate_counter_geometry(&mut self) {
-        self.counter_geometry = None;
-    }
-
     fn present_counter(&mut self) {
-        let history_visible = self.ui.window_is_open(HISTORY_LABEL);
-        let base_show = !history_visible
+        let show = !self.ui.window_is_open(HISTORY_LABEL)
             && self.pet_state.as_ref().is_some_and(|state| state.visible)
-            && self.mode() != CounterMode::Hidden
-            && self.cursor_over_pet();
-        let geometry = if base_show {
-            self.counter_geometry.or_else(|| self.counter_geometry())
-        } else {
-            None
-        };
-        let show = base_show && geometry.is_some();
-        if show == self.counter_shown && geometry == self.counter_geometry {
-            return;
-        }
-        self.apply_counter(show, geometry);
+            && self.mode() != CounterMode::Hidden;
+        self.apply_counter(show);
     }
 
-    fn apply_counter(&mut self, show: bool, geometry: Option<WindowGeometry>) {
-        let Some(app) = self.ui.app_handle() else {
-            self.counter_shown = false;
-            self.counter_geometry = None;
-            return;
-        };
+    fn apply_counter(&mut self, desired: bool) {
+        let bounds = self.pet_bounds;
+        let scale = self.scale_percent;
+        let shown = Arc::clone(&self.counter_shown);
+        let geometry_cache = Arc::clone(&self.counter_geometry);
         let ui = self.ui.clone();
-        let main_app = app.clone();
-        let _ = self.ui.dispatch_window(move |_app| {
-            let window = if show {
-                bongocat_companion::ensure_window(&main_app, COUNTER_LABEL).ok()
-            } else {
-                main_app.get_webview_window(COUNTER_LABEL)
-            };
-            let Some(window) = window else {
+        let _ = self.ui.dispatch_window(move |app| {
+            // Cursor and monitor queries wait for Tauri's UI thread. Keep them
+            // with window creation, outside the protocol's business-state lock.
+            let bounds = bounds.filter(|bounds| {
+                desired
+                    && app.cursor_position().is_ok_and(|cursor| {
+                        cursor.x >= f64::from(bounds.x)
+                            && cursor.x < f64::from(bounds.x) + f64::from(bounds.width)
+                            && cursor.y >= f64::from(bounds.y)
+                            && cursor.y < f64::from(bounds.y) + f64::from(bounds.height)
+                    })
+            });
+            let geometry = bounds.and_then(|bounds| Self::counter_geometry(app, bounds, scale));
+            let show = geometry.is_some();
+            let previous = *geometry_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if shown.load(Ordering::Relaxed) == show
+                && previous == geometry
+                && ui.window_is_open(COUNTER_LABEL) == show
+            {
                 return;
-            };
-            if show {
-                let _ = window.set_ignore_cursor_events(true);
             }
-            if let Some(geometry) = geometry {
-                let _ = window.set_size(PhysicalSize::new(geometry.width, geometry.height));
-                let _ = window.set_position(PhysicalPosition::new(geometry.x, geometry.y));
-            }
-            if show {
-                let _ = window.show();
-                ui.emit(UiEvent::StateChanged);
+            let window = if show {
+                bongocat_companion::ensure_window(app, COUNTER_LABEL).ok()
             } else {
-                let _ = window.destroy();
+                app.get_webview_window(COUNTER_LABEL)
+            };
+            let mut applied = false;
+            if let Some(window) = window {
+                if let Some(geometry) = geometry {
+                    let _ = window.set_ignore_cursor_events(true);
+                    let _ = window.set_size(PhysicalSize::new(geometry.width, geometry.height));
+                    let _ = window.set_position(PhysicalPosition::new(geometry.x, geometry.y));
+                    applied = window.show().is_ok();
+                } else {
+                    let _ = window.destroy();
+                }
             }
+            let geometry = if applied { geometry } else { None };
+            shown.store(applied, Ordering::Relaxed);
+            *geometry_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = geometry;
+            ui.set_window_open(COUNTER_LABEL, applied);
+            ui.emit(UiEvent::StateChanged);
         });
-        self.counter_shown = show;
-        self.counter_geometry = if show { geometry } else { None };
-        if show {
-            self.last_counter_text = self.counter_text();
-            self.last_counter_scale = self.scale_percent;
-        }
     }
 
     fn emit_counter_if_changed(&mut self) {
-        if !self.counter_shown {
+        if !self.counter_shown.load(Ordering::Relaxed) {
             return;
         }
         let text = self.counter_text();
@@ -458,15 +446,17 @@ impl CyberWorkState {
         }
     }
 
-    fn counter_geometry(&self) -> Option<WindowGeometry> {
-        let bounds = self.pet_bounds?;
-        let app = self.ui.app_handle()?;
-        let monitor = monitor_for(&app, Some(bounds));
+    fn counter_geometry(
+        app: &AppHandle,
+        bounds: PetBounds,
+        scale_percent: u16,
+    ) -> Option<WindowGeometry> {
+        let monitor = monitor_for(app, Some(bounds));
         let factor = monitor
             .as_ref()
             .map_or(f64::from(bounds.scale), tauri::Monitor::scale_factor)
             .max(0.5);
-        let scale = f64::from(self.scale_percent) / 100.0;
+        let scale = f64::from(scale_percent) / 100.0;
         let width = (COUNTER_WIDTH * scale * factor).round().max(1.0) as u32;
         let height = (COUNTER_HEIGHT * scale * factor).round().max(1.0) as u32;
         let gap = COUNTER_GAP * factor;
@@ -491,16 +481,12 @@ impl CyberWorkState {
         })
     }
 
-    fn history_geometry(&self) -> Option<WindowGeometry> {
-        let app = self.ui.app_handle()?;
-        let monitor = monitor_for(&app, self.pet_bounds);
+    fn history_geometry(app: &AppHandle, bounds: Option<PetBounds>) -> Option<WindowGeometry> {
+        let monitor = monitor_for(app, bounds);
         let factor = monitor
             .as_ref()
             .map_or_else(
-                || {
-                    self.pet_bounds
-                        .map_or(1.0, |bounds| f64::from(bounds.scale))
-                },
+                || bounds.map_or(1.0, |bounds| f64::from(bounds.scale)),
                 tauri::Monitor::scale_factor,
             )
             .max(0.5);
@@ -532,10 +518,11 @@ impl CyberWorkState {
         let Some(app) = self.ui.app_handle() else {
             return;
         };
-        let geometry = self.history_geometry();
+        let bounds = self.pet_bounds;
         let ui = self.ui.clone();
         let main_app = app.clone();
         let _ = self.ui.dispatch_window(move |_app| {
+            let geometry = Self::history_geometry(&main_app, bounds);
             if let Ok(window) = bongocat_companion::ensure_window(&main_app, HISTORY_LABEL) {
                 if let Some(geometry) = geometry {
                     let _ = window.set_size(PhysicalSize::new(geometry.width, geometry.height));
@@ -549,7 +536,7 @@ impl CyberWorkState {
         });
         // The pointer is still over the pet while the native menu closes; the
         // next tick would otherwise show the counter behind the history panel.
-        self.apply_counter(false, None);
+        self.apply_counter(false);
     }
 
     fn set_scale(&mut self, value: u16) -> bool {
@@ -561,7 +548,6 @@ impl CyberWorkState {
         }
         self.scale_percent = value;
         self.dirty = true;
-        self.invalidate_counter_geometry();
         self.present_counter();
         self.emit_counter_if_changed();
         let _ = self.persist();
@@ -710,6 +696,21 @@ fn monitor_for(app: &AppHandle, bounds: Option<PetBounds>) -> Option<tauri::Moni
 }
 
 impl CompanionState for CyberWorkState {
+    fn next_wake_ms(&self) -> Option<u64> {
+        Some(
+            if self.mode() != CounterMode::Hidden || self.counter_shown.load(Ordering::Relaxed) {
+                200
+            } else if self.dirty {
+                SAVE_INTERVAL
+                    .saturating_sub(self.last_save.elapsed())
+                    .as_millis()
+                    .clamp(200, 2000) as u64
+            } else {
+                60_000
+            },
+        )
+    }
+
     fn id(&self) -> &'static str {
         PLUGIN_ID
     }
@@ -770,14 +771,12 @@ impl CompanionState for CyberWorkState {
 
     fn pet_bounds(&mut self, bounds: PetBounds) -> Result<PluginOutput, String> {
         self.pet_bounds = Some(bounds);
-        self.invalidate_counter_geometry();
         self.present_counter();
         Ok(self.plugin_output())
     }
 
     fn pet_state(&mut self, state: PetState) -> Result<PluginOutput, String> {
         self.pet_state = Some(state);
-        self.invalidate_counter_geometry();
         self.present_counter();
         self.emit_counter_if_changed();
         Ok(self.plugin_output())
@@ -811,8 +810,7 @@ impl CompanionState for CyberWorkState {
         self.last_tick_ms = None;
         self.dirty = true;
         self.error = None;
-        self.invalidate_counter_geometry();
-        self.apply_counter(false, None);
+        self.apply_counter(false);
         let _ = self.persist();
         Ok(self.plugin_output())
     }

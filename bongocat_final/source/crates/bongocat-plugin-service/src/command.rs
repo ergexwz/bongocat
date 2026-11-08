@@ -121,6 +121,18 @@ pub enum PluginCommandError {
     NotRunning,
     #[error("the plugin operation failed")]
     Operation,
+    #[error("the plugin command queue is full")]
+    Busy,
+    #[error("the plugin did not reply before its deadline")]
+    Timeout,
+    #[error("the plugin configuration was refused")]
+    InvalidConfiguration,
+    #[error("the plugin state could not be saved")]
+    StorageFailure,
+    #[error("the plugin requires an unsupported host capability")]
+    UnsupportedCapability,
+    #[error("the plugin violated its protocol")]
+    ProtocolViolation,
 }
 
 impl PluginCommandError {
@@ -130,6 +142,12 @@ impl PluginCommandError {
             Self::NotFound => "plugin_not_found",
             Self::NotRunning => "plugin_not_running",
             Self::Operation => "plugin_operation_failed",
+            Self::Busy => "plugin_busy",
+            Self::Timeout => "plugin_timeout",
+            Self::InvalidConfiguration => "plugin_invalid_configuration",
+            Self::StorageFailure => "plugin_storage_failure",
+            Self::UnsupportedCapability => "plugin_unsupported_capability",
+            Self::ProtocolViolation => "plugin_protocol_violation",
         }
     }
 }
@@ -223,16 +241,27 @@ pub struct PluginServiceClosed;
 /// The window end of the plugin service channel.
 #[derive(Clone)]
 pub struct PluginServiceClient {
+    wake: bongocat_plugin_hud::WorkerWake,
     commands: Sender<PluginCommand>,
 }
 
 impl PluginServiceClient {
+    pub(crate) fn wake_signal(&self) -> bongocat_plugin_hud::WorkerWake {
+        self.wake.clone()
+    }
     pub fn bounded(capacity: usize) -> (Self, PluginServiceEndpoint) {
         assert!(capacity > 0, "plugin command capacity must be positive");
         let (commands, receiver) = async_channel::bounded(capacity);
+        let wake = bongocat_plugin_hud::WorkerWake::default();
         (
-            Self { commands },
-            PluginServiceEndpoint { commands: receiver },
+            Self {
+                commands,
+                wake: wake.clone(),
+            },
+            PluginServiceEndpoint {
+                commands: receiver,
+                wake,
+            },
         )
     }
 
@@ -470,9 +499,12 @@ impl PluginServiceClient {
     }
 
     fn send_blocking(&self, command: PluginCommand) -> Result<(), PluginCommandError> {
-        self.commands
+        let result = self
+            .commands
             .send_blocking(command)
-            .map_err(|_| PluginCommandError::ServiceUnavailable)
+            .map_err(|_| PluginCommandError::ServiceUnavailable);
+        self.wake.wake();
+        result
     }
 
     fn request_blocking<T>(
@@ -485,10 +517,13 @@ impl PluginServiceClient {
     }
 
     async fn send(&self, command: PluginCommand) -> Result<(), PluginCommandError> {
-        self.commands
+        let result = self
+            .commands
             .send(command)
             .await
-            .map_err(|_| PluginCommandError::ServiceUnavailable)
+            .map_err(|_| PluginCommandError::ServiceUnavailable);
+        self.wake.wake();
+        result
     }
 
     async fn request<T>(
@@ -507,10 +542,17 @@ const fn closed() -> PluginCommandError {
 
 /// The service end of the plugin command channel.
 pub struct PluginServiceEndpoint {
+    wake: bongocat_plugin_hud::WorkerWake,
     commands: Receiver<PluginCommand>,
 }
 
 impl PluginServiceEndpoint {
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.commands.is_empty()
+    }
+    pub(crate) fn bind_waker(&self) {
+        self.wake.bind(std::thread::current());
+    }
     pub(crate) fn close(&self) {
         self.commands.close();
         while self.commands.try_recv().is_ok() {}

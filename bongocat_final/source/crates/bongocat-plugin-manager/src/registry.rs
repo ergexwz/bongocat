@@ -3,7 +3,12 @@ use crate::loader::Process;
 use bongocat_plugin_sdk::{
     Configuration, HostMessage, PetBounds, PetState, PluginMetadata, PluginOutput, UiNode,
 };
-use std::{collections::BTreeMap, io, path::PathBuf};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -18,6 +23,8 @@ pub enum RegistryError {
     InvalidPreview,
     #[error("plugin process failed: {0}")]
     Process(#[from] std::io::Error),
+    #[error("plugin state could not be saved: {0}")]
+    Storage(std::io::Error),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PluginState {
@@ -27,13 +34,23 @@ pub enum PluginState {
     Failed,
 }
 struct Entry {
+    stats: Arc<crate::loader::WireStats>,
+    events: Arc<Mutex<VecDeque<bongocat_plugin_sdk::PluginBubble>>>,
     metadata: PluginMetadata,
     root: PathBuf,
     state: PluginState,
     process: Option<Process>,
-    last_output: PluginOutput,
+    last_output: Arc<PluginOutput>,
     data_file: PathBuf,
     enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginProjection {
+    pub metadata: PluginMetadata,
+    pub state: PluginState,
+    pub enabled: bool,
+    pub output: Arc<PluginOutput>,
 }
 /// The session envelope stored beside the packages: a plugin's configuration,
 /// its own state bytes and the user's enable request.
@@ -47,7 +64,13 @@ struct SavedSession {
     schema_version: u32,
     config: Configuration,
     state: Vec<u8>,
+    #[serde(default, skip_serializing_if = "zero_schema")]
+    state_schema_version: u32,
     enabled: bool,
+}
+
+fn zero_schema(version: &u32) -> bool {
+    *version == 0
 }
 
 impl SavedSession {
@@ -56,6 +79,7 @@ impl SavedSession {
             schema_version: 1,
             config: Configuration::new(),
             state: Vec::new(),
+            state_schema_version: 0,
             enabled: false,
         }
     }
@@ -72,6 +96,120 @@ pub struct PluginRegistry {
     locale: Option<String>,
 }
 impl PluginRegistry {
+    pub(crate) fn statistics(&self, id: &str) -> Option<Arc<crate::loader::WireStats>> {
+        self.entries.get(id).map(|entry| Arc::clone(&entry.stats))
+    }
+
+    pub(crate) fn next_wake(&self) -> Option<std::time::Instant> {
+        self.entries
+            .values()
+            .filter_map(|entry| entry.process.as_ref().and_then(Process::next_wake))
+            .min()
+    }
+    pub(crate) fn due_wakes(&mut self, elapsed_ms: u64) -> u64 {
+        let mut count = 0;
+        let now = std::time::Instant::now();
+        for entry in self.entries.values_mut() {
+            if entry.metadata.protocol_version == 2
+                && entry
+                    .process
+                    .as_ref()
+                    .is_some_and(|process| process.take_due_wake(now))
+            {
+                count += 1;
+                let _ = entry.required_exchange(HostMessage::Tick { elapsed_ms });
+            }
+        }
+        count
+    }
+    pub(crate) fn drain_events(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(String, bongocat_plugin_sdk::PluginBubble)> {
+        let mut result = Vec::new();
+        for (id, entry) in &mut self.entries {
+            let mut events = entry
+                .events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let count = limit.saturating_sub(result.len()).min(events.len());
+            result.extend(events.drain(..count).map(|event| (id.clone(), event)));
+        }
+        result
+    }
+    pub(crate) fn rebind_thread(&mut self) {
+        for entry in self.entries.values_mut() {
+            if let Some(process) = &mut entry.process {
+                process.rebind_thread();
+            }
+        }
+    }
+    pub(crate) fn detach(&mut self, id: &str) -> Self {
+        let mut detached = Self::new();
+        detached.locale = self.locale.clone();
+        if let Some(entry) = self.entries.remove(id) {
+            self.entries.insert(
+                id.to_owned(),
+                Entry {
+                    stats: Arc::clone(&entry.stats),
+                    events: Arc::new(Mutex::new(VecDeque::new())),
+                    metadata: entry.metadata.clone(),
+                    root: entry.root.clone(),
+                    state: entry.state,
+                    process: None,
+                    last_output: entry.last_output.clone(),
+                    data_file: entry.data_file.clone(),
+                    enabled: entry.enabled,
+                },
+            );
+            detached.entries.insert(id.to_owned(), entry);
+        }
+        detached
+    }
+
+    pub(crate) fn projection(&self, id: &str) -> Option<PluginProjection> {
+        self.entries.get(id).map(|entry| PluginProjection {
+            metadata: entry.metadata.clone(),
+            state: entry.state,
+            enabled: entry.enabled,
+            output: entry.last_output.clone(),
+        })
+    }
+
+    pub(crate) fn apply_projection(
+        &mut self,
+        id: &str,
+        projection: Option<PluginProjection>,
+        store: &std::path::Path,
+    ) {
+        match projection {
+            Some(p) => {
+                self.entries.insert(
+                    id.into(),
+                    Entry {
+                        stats: Arc::default(),
+                        events: Arc::new(Mutex::new(VecDeque::new())),
+                        root: store
+                            .join(crate::PACKAGES_DIRECTORY)
+                            .join(id)
+                            .join(&p.metadata.version),
+                        data_file: store
+                            .join(crate::DATA_DIRECTORY)
+                            .join(id)
+                            .join("session.json"),
+                        metadata: p.metadata,
+                        state: p.state,
+                        enabled: p.enabled,
+                        last_output: p.output,
+                        process: None,
+                    },
+                );
+            }
+            None => {
+                self.entries.remove(id);
+            }
+        }
+    }
     pub fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
@@ -126,15 +264,18 @@ impl PluginRegistry {
         self.entries.insert(
             metadata.id.clone(),
             Entry {
+                stats: Arc::default(),
                 metadata,
+                events: Arc::new(Mutex::new(VecDeque::new())),
                 root,
                 state: PluginState::Discovered,
                 process: None,
-                last_output: PluginOutput {
+                last_output: Arc::new(PluginOutput {
                     config: saved.config,
                     state: saved.state,
+                    state_schema_version: saved.state_schema_version,
                     ..Default::default()
-                },
+                }),
                 data_file,
                 enabled: saved.enabled,
             },
@@ -184,27 +325,44 @@ impl PluginRegistry {
             self.forget(&id);
         }
     }
-    pub fn enable(&mut self, id: &str) -> Result<PluginOutput, RegistryError> {
+    pub fn enable(&mut self, id: &str) -> Result<Arc<PluginOutput>, RegistryError> {
         let locale = self.locale.clone();
         let entry = self
             .entries
             .get_mut(id)
             .ok_or_else(|| RegistryError::NotFound(id.into()))?;
         if entry.process.is_some() {
-            return Ok(entry.last_output.clone());
+            return Ok(Arc::clone(&entry.last_output));
         }
         // Remember an explicit enable even if process creation or handshake fails.
         if let Some(directory) = entry.data_file.parent() {
             std::fs::create_dir_all(directory)?;
         }
-        persist_output(entry, &entry.last_output, true)?;
+        if let Err(error) = persist_output(entry, &entry.last_output, true) {
+            entry.state = PluginState::Failed;
+            return Err(RegistryError::Storage(error));
+        }
         entry.enabled = true;
-        let started = (|| -> std::io::Result<_> {
-            let mut process = Process::start(&entry.root, &entry.metadata)?;
-            let mut output = process.exchange(HostMessage::Start {
-                config: entry.last_output.config.clone(),
-                state: entry.last_output.state.clone(),
-            })?;
+        let started = (|| -> Result<_, RegistryError> {
+            let mut process = Process::start_with_events(
+                &entry.root,
+                &entry.metadata,
+                Arc::clone(&entry.events),
+                Arc::clone(&entry.stats),
+            )?;
+            let message = if entry.metadata.protocol_version == 1 {
+                HostMessage::Start {
+                    config: entry.last_output.config.clone(),
+                    state: entry.last_output.state.clone(),
+                }
+            } else {
+                HostMessage::Restore {
+                    config: entry.last_output.config.clone(),
+                    state: entry.last_output.state.clone(),
+                    schema_version: entry.last_output.state_schema_version,
+                }
+            };
+            let mut output = process.exchange(message)?;
             // A plugin started while the host already shows a language has to
             // publish in it, because the host only announces changes from here
             // on. The message goes through the same capability-gated delivery
@@ -215,12 +373,24 @@ impl PluginRegistry {
                 &mut output,
                 locale.as_deref(),
             )?;
-            persist_output(entry, &output, true)?;
+            if output.state_schema_version != entry.last_output.state_schema_version {
+                let previous = crate::install::read_bounded(&entry.data_file, MAX_SESSION_BYTES)?;
+                let backup = entry
+                    .data_file
+                    .with_file_name("checkpoint-before-migration.json");
+                use std::io::Write;
+                let mut file = atomic_write_file::AtomicWriteFile::options().open(&backup)?;
+                file.write_all(&previous)?;
+                file.flush()?;
+                file.commit()?;
+            }
+            persist_output(entry, &output, true).map_err(RegistryError::Storage)?;
+            process.acknowledge_checkpoint(output.checkpoint_revision)?;
             Ok((process, output))
         })();
         match started {
             Ok((process, output)) => {
-                entry.last_output = output.clone();
+                entry.set_output(output.clone());
                 entry.process = Some(process);
                 entry.state = PluginState::Enabled;
                 entry.enabled = true;
@@ -228,7 +398,7 @@ impl PluginRegistry {
             }
             Err(error) => {
                 entry.state = PluginState::Failed;
-                Err(error.into())
+                Err(error)
             }
         }
     }
@@ -252,30 +422,13 @@ impl PluginRegistry {
             .entries
             .get_mut(id)
             .ok_or_else(|| RegistryError::NotFound(id.into()))?;
-        let stopped = entry
-            .process
-            .take()
-            .map(|mut process| process.stop())
-            .transpose();
-        if let Ok(Some(output)) = &stopped {
-            entry.last_output = output.clone();
-        }
-        entry.enabled = enabled;
-        entry.state = if stopped.is_err() {
-            PluginState::Failed
-        } else {
-            PluginState::Disabled
-        };
-        // Persist the requested enable flag even after a refused/failed Stop,
-        // or a plugin explicitly disabled by the user would restart next boot.
-        persist(entry)?;
-        stopped.map(|_| ()).map_err(Into::into)
+        stop_entry(entry, enabled)
     }
     pub fn configure(
         &mut self,
         id: &str,
         config: Configuration,
-    ) -> Result<PluginOutput, RegistryError> {
+    ) -> Result<Arc<PluginOutput>, RegistryError> {
         let entry = self
             .entries
             .get_mut(id)
@@ -287,11 +440,11 @@ impl PluginRegistry {
             // with settings different from disk. Retry starts the last good state.
             entry.fail();
             entry.last_output = previous;
-            return Err(error.into());
+            return Err(RegistryError::Storage(error));
         }
         Ok(output)
     }
-    pub fn action(&mut self, id: &str, action: &str) -> Result<PluginOutput, RegistryError> {
+    pub fn action(&mut self, id: &str, action: &str) -> Result<Arc<PluginOutput>, RegistryError> {
         let entry = self
             .entries
             .get_mut(id)
@@ -303,7 +456,7 @@ impl PluginRegistry {
         id: &str,
         key: &str,
         value: &str,
-    ) -> Result<PluginOutput, RegistryError> {
+    ) -> Result<Arc<PluginOutput>, RegistryError> {
         let entry = self
             .entries
             .get_mut(id)
@@ -324,10 +477,11 @@ impl PluginRegistry {
     }
     pub fn collect_updates(&mut self) {
         for entry in self.entries.values_mut() {
-            if !entry
-                .metadata
-                .capabilities
-                .contains(&bongocat_plugin_sdk::Capability::PushOutputV1)
+            if entry.metadata.protocol_version == 1
+                && !entry
+                    .metadata
+                    .capabilities
+                    .contains(&bongocat_plugin_sdk::Capability::PushOutputV1)
             {
                 continue;
             }
@@ -335,16 +489,32 @@ impl PluginRegistry {
                 continue;
             };
             match process.update() {
-                Ok(Some(output)) => entry.last_output = output,
+                Ok(Some(output)) => {
+                    let checkpoint_changed =
+                        output.checkpoint_revision > entry.last_output.checkpoint_revision;
+                    if output.state_schema_version != entry.last_output.state_schema_version
+                        || (checkpoint_changed
+                            && persist_output(entry, &output, entry.enabled).is_err())
+                        || (checkpoint_changed
+                            && entry.process.as_ref().is_some_and(|p| {
+                                p.acknowledge_checkpoint(output.checkpoint_revision)
+                                    .is_err()
+                            }))
+                    {
+                        entry.fail();
+                    } else {
+                        entry.set_output(output);
+                    }
+                }
                 Ok(None) => {}
                 Err(_) => entry.fail(),
             }
         }
     }
-    pub fn tick(&mut self, elapsed_ms: u64) -> Vec<(String, PluginOutput)> {
+    pub fn tick(&mut self, elapsed_ms: u64) -> Vec<(String, Arc<PluginOutput>)> {
         let mut outputs = Vec::new();
         for (id, entry) in &mut self.entries {
-            if entry.process.is_none() {
+            if entry.process.is_none() || entry.metadata.protocol_version != 1 {
                 continue;
             }
             if let Ok(output) = entry.required_exchange(HostMessage::Tick { elapsed_ms }) {
@@ -354,7 +524,7 @@ impl PluginRegistry {
         outputs
     }
     pub fn output(&self, id: &str) -> Option<&PluginOutput> {
-        self.entries.get(id).map(|e| &e.last_output)
+        self.entries.get(id).map(|e| e.last_output.as_ref())
     }
 
     /// Show a newly resolved catalog tag to every plugin that declares it can
@@ -383,10 +553,10 @@ impl PluginRegistry {
             let Some(mut process) = entry.process.take() else {
                 continue;
             };
-            let mut output = entry.last_output.clone();
+            let mut output = Arc::clone(&entry.last_output);
             match show_locale(&mut process, &entry.metadata, &mut output, Some(locale)) {
                 Ok(()) => {
-                    entry.last_output = output;
+                    entry.set_output(output);
                     entry.process = Some(process);
                 }
                 Err(error) => {
@@ -402,19 +572,24 @@ impl PluginRegistry {
     }
 
     pub fn shutdown(&mut self) -> Result<(), RegistryError> {
-        let ids = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| entry.process.is_some())
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        let mut failure = None;
-        for id in ids {
-            if let Err(error) = self.suspend(&id) {
-                failure.get_or_insert(error);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = self
+                .entries
+                .values_mut()
+                .filter(|entry| entry.process.is_some())
+                .map(|entry| scope.spawn(move || stop_entry(entry, entry.enabled)))
+                .collect();
+            let mut failure = None;
+            for worker in workers {
+                let result = worker.join().unwrap_or_else(|_| {
+                    Err(io::Error::other("plugin shutdown worker panicked").into())
+                });
+                if let Err(error) = result {
+                    failure.get_or_insert(error);
+                }
             }
-        }
-        failure.map_or(Ok(()), Err)
+            failure.map_or(Ok(()), Err)
+        })
     }
 
     pub fn resume_enabled(&mut self) -> Result<(), RegistryError> {
@@ -453,6 +628,11 @@ impl PluginRegistry {
                     .capabilities
                     .contains(&bongocat_plugin_sdk::Capability::InputEventsV1)
             {
+                if !entry.process.as_ref().is_some_and(|process| {
+                    process.subscribed(bongocat_plugin_sdk::Capability::InputEventsV1)
+                }) {
+                    continue;
+                }
                 let _ = entry.required_exchange(HostMessage::InputEvents {
                     events: events.clone(),
                     overflow,
@@ -471,6 +651,11 @@ impl PluginRegistry {
                     .capabilities
                     .contains(&bongocat_plugin_sdk::Capability::CompanionV1)
             {
+                if !entry.process.as_ref().is_some_and(|process| {
+                    process.subscribed(bongocat_plugin_sdk::Capability::CompanionV1)
+                }) {
+                    continue;
+                }
                 let _ = entry.required_exchange(HostMessage::PetBounds { bounds });
             }
         }
@@ -484,6 +669,11 @@ impl PluginRegistry {
     pub fn pet_state(&mut self, state: PetState) {
         for entry in self.entries.values_mut() {
             if entry.process.is_some() && receives_pet_state(&entry.metadata.capabilities) {
+                if !entry.process.as_ref().is_some_and(|process| {
+                    process.subscribed(bongocat_plugin_sdk::Capability::PetStateV1)
+                }) {
+                    continue;
+                }
                 let _ = entry.required_exchange(HostMessage::PetState {
                     state: state.clone(),
                 });
@@ -501,7 +691,9 @@ impl PluginRegistry {
             else {
                 continue;
             };
-            if entry.process.is_some() {
+            if entry.process.as_ref().is_some_and(|process| {
+                process.subscribed(bongocat_plugin_sdk::Capability::InputActivityV1)
+            }) {
                 let _ = entry.required_exchange(message);
             }
         }
@@ -528,13 +720,35 @@ impl PluginRegistry {
         {
             return;
         }
-        if entry.process.is_some() {
+        if entry.process.as_ref().is_some_and(|process| {
+            process.subscribed(bongocat_plugin_sdk::Capability::InputActivityV1)
+        }) {
             let _ = entry.required_exchange(HostMessage::InputActivity {
                 elapsed_ms,
                 activity,
             });
         }
     }
+}
+
+fn stop_entry(entry: &mut Entry, enabled: bool) -> Result<(), RegistryError> {
+    let stopped = entry
+        .process
+        .take()
+        .map(|mut process| process.stop())
+        .transpose();
+    if let Ok(Some(output)) = &stopped {
+        entry.set_output(output.clone());
+    }
+    entry.enabled = enabled;
+    entry.state = if stopped.is_err() {
+        PluginState::Failed
+    } else {
+        PluginState::Disabled
+    };
+    // Persist explicit disable even if Stop fails; shutdown retains the user's choice.
+    persist(entry).map_err(RegistryError::Storage)?;
+    stopped.map(|_| ()).map_err(Into::into)
 }
 
 /// Whether one plugin's manifest opted into the companion state message.
@@ -587,7 +801,7 @@ fn localizes(entry: &Entry) -> bool {
 fn show_locale(
     process: &mut Process,
     metadata: &PluginMetadata,
-    output: &mut PluginOutput,
+    output: &mut Arc<PluginOutput>,
     locale: Option<&str>,
 ) -> std::io::Result<()> {
     let Some(locale) = locale else {
@@ -606,23 +820,49 @@ fn show_locale(
 }
 
 impl Entry {
+    fn set_output(&mut self, output: Arc<PluginOutput>) {
+        if !Arc::ptr_eq(&self.last_output, &output) && self.last_output != output {
+            self.last_output = output;
+        }
+    }
+
     fn fail(&mut self) {
         self.process.take();
         self.state = PluginState::Failed;
     }
 
-    fn exchange(&mut self, message: HostMessage) -> Result<PluginOutput, RegistryError> {
+    fn exchange(&mut self, message: HostMessage) -> Result<Arc<PluginOutput>, RegistryError> {
         let process = self
             .process
             .as_mut()
             .ok_or_else(|| RegistryError::NotRunning(self.metadata.id.clone()))?;
         match process.exchange(message) {
             Ok(output) => {
-                self.last_output = output.clone();
+                if output.state_schema_version != self.last_output.state_schema_version {
+                    self.fail();
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "checkpoint schema changed after startup",
+                    )
+                    .into());
+                }
+                if output.checkpoint_revision > self.last_output.checkpoint_revision {
+                    if let Err(error) = persist_output(self, &output, self.enabled) {
+                        self.fail();
+                        return Err(RegistryError::Storage(error));
+                    }
+                    if let Some(process) = &self.process {
+                        process.acknowledge_checkpoint(output.checkpoint_revision)?;
+                    }
+                }
+                self.set_output(output.clone());
                 Ok(output)
             }
             Err(error) => {
-                if error.kind() != std::io::ErrorKind::InvalidInput {
+                if !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::InvalidInput | std::io::ErrorKind::WouldBlock
+                ) {
                     self.fail();
                 }
                 Err(error.into())
@@ -630,7 +870,10 @@ impl Entry {
         }
     }
 
-    fn required_exchange(&mut self, message: HostMessage) -> Result<PluginOutput, RegistryError> {
+    fn required_exchange(
+        &mut self,
+        message: HostMessage,
+    ) -> Result<Arc<PluginOutput>, RegistryError> {
         let result = self.exchange(message);
         if result.is_err() {
             self.fail();
@@ -662,6 +905,7 @@ fn persist_output(entry: &Entry, output: &PluginOutput, enabled: bool) -> std::i
             schema_version: 1,
             config: output.config.clone(),
             state: output.state.clone(),
+            state_schema_version: output.state_schema_version,
             enabled,
         },
     )?;
@@ -849,16 +1093,12 @@ mod tests {
             }],
             preview,
         };
-        entry.last_output.settings.nodes = vec![select(false)];
+        Arc::make_mut(&mut entry.last_output).settings.nodes = vec![select(false)];
         assert!(matches!(
             registry.preview(&metadata.id, "pack", "one"),
             Err(RegistryError::InvalidPreview)
         ));
-        registry
-            .entries
-            .get_mut(&metadata.id)
-            .unwrap()
-            .last_output
+        Arc::make_mut(&mut registry.entries.get_mut(&metadata.id).unwrap().last_output)
             .settings
             .nodes = vec![select(true)];
         for (key, value) in [("other", "one"), ("pack", "other")] {

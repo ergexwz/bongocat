@@ -7,6 +7,9 @@
 //! because swallowing them is how a window stops closing.
 
 use super::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    WM_DISPLAYCHANGE, WM_DWMCOMPOSITIONCHANGED, WM_PAINT, WM_SHOWWINDOW, WM_SIZE,
+};
 
 pub(crate) fn pump_window_messages() {
     let mut message = MSG::default();
@@ -150,6 +153,23 @@ pub(crate) unsafe extern "system" fn window_proc(
     }
     // SAFETY: userdata is either null before WM_NCCREATE or the live boxed state above.
     let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OverlayWindowState };
+    if !state.is_null()
+        && matches!(
+            message,
+            WM_PAINT
+                | WM_SIZE
+                | WM_SHOWWINDOW
+                | WM_DISPLAYCHANGE
+                | WM_DPICHANGED
+                | WM_DWMCOMPOSITIONCHANGED
+        )
+    {
+        // SAFETY: userdata belongs to this HWND and this callback runs on its
+        // owner thread. Default processing still validates paint regions below.
+        unsafe {
+            (*state).presentation_invalidated = true;
+        }
+    }
     if message == WM_NCDESTROY {
         // SAFETY: clearing userdata prevents later messages from observing the stale pointer.
         unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };

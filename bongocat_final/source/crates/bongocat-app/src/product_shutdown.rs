@@ -8,6 +8,31 @@
 
 use super::*;
 
+/// Opt-in profiling control metadata: static routes and numeric budgets only.
+/// This is absent from Production and never records input or request contents.
+#[cfg(feature = "storage-test-injection")]
+#[track_caller]
+pub(crate) fn trace_profile_control(event: &'static str, value: Option<u64>) {
+    let Some(path) = env::var_os("BONGOCAT_PERF_CONTROL_REPORT") else {
+        return;
+    };
+    let caller = std::panic::Location::caller();
+    let record = serde_json::json!({
+        "event": event,
+        "value": value,
+        "file": std::path::Path::new(caller.file()).file_name().and_then(|name| name.to_str()),
+        "line": caller.line(),
+        "unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis()).unwrap_or_default(),
+    });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{record}");
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("product run failed: {}", .failures.join("; "))]
 pub(crate) struct ProductRunError {
@@ -120,7 +145,10 @@ pub(crate) const fn native_theme_for_startup(
 }
 
 #[cfg(target_os = "windows")]
+#[cfg_attr(feature = "storage-test-injection", track_caller)]
 pub(crate) fn request_windows_product_quit(shutdown_requested: &AtomicBool) {
+    #[cfg(feature = "storage-test-injection")]
+    trace_profile_control("request_windows_product_quit", None);
     shutdown_requested.store(true, Ordering::Release);
 }
 
@@ -159,6 +187,8 @@ pub(crate) fn finish_product_quit(cx: &mut App) {
 }
 
 pub(crate) fn request_product_quit(cx: &mut App) {
+    #[cfg(feature = "storage-test-injection")]
+    trace_profile_control("request_product_quit", None);
     let window = cx
         .try_global::<ProductCoordinator>()
         .and_then(|coordinator| coordinator.settings_window.clone());
@@ -172,6 +202,8 @@ pub(crate) fn request_product_quit(cx: &mut App) {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn start_windows_product_shutdown(cx: &mut App) {
+    #[cfg(feature = "storage-test-injection")]
+    trace_profile_control("start_windows_product_shutdown", None);
     if !cx.has_global::<ProductCoordinator>() {
         return;
     }
@@ -241,13 +273,21 @@ impl ProductShutdown {
             record_failure(&failures, error.to_string());
         }
         match self.overlay.finish_after_runtime_shutdown() {
-            Ok(report) if self.coordinator.expect_visible_frame && report.frames_presented == 0 => {
-                record_failure(&failures, "product overlay presented no frames");
+            Ok(report) => {
+                if self.coordinator.expect_visible_frame && report.frames_presented == 0 {
+                    record_failure(&failures, "product overlay presented no frames");
+                }
+                if !report.placement_fully_visible {
+                    record_failure(&failures, "product overlay left the display bounds");
+                }
+                #[cfg(feature = "storage-test-injection")]
+                if let Some(path) = env::var_os("BONGOCAT_PERF_REPORT") {
+                    let metrics = serde_json::json!({"frames_presented":report.frames_presented,"frames_skipped":report.frames_skipped,"model_generation":report.model_generation,"model_commit_rejections":report.model_commit_rejections,"input_start_error":report.input_start_error.map(|error| error.as_str()),"input_diagnostics":format!("{:?}", report.input_diagnostics),"render_diagnostics":format!("{:?}", report.render_diagnostics),"frame_timing":report.frame_timing.map(|timing| serde_json::json!({"samples":timing.sample_count,"samples_dropped":timing.samples_dropped,"draw_p50_us":timing.draw_p50_us,"draw_p95_us":timing.draw_p95_us,"draw_p99_us":timing.draw_p99_us,"missed_draw_deadlines":timing.missed_deadlines}))});
+                    if let Err(error) = std::fs::write(path, metrics.to_string()) {
+                        record_failure(&failures, format!("performance report: {error}"));
+                    }
+                }
             }
-            Ok(report) if !report.placement_fully_visible => {
-                record_failure(&failures, "product overlay left the display bounds");
-            }
-            Ok(_) => {}
             Err(error) => record_failure(&failures, error.to_string()),
         }
         failures

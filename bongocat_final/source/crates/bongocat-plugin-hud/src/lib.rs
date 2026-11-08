@@ -30,6 +30,8 @@ mod font;
 mod layer;
 mod layout;
 mod paint;
+mod wake;
+pub use wake::{WakingReceiver, WakingSender, WorkerWake, waking_channel};
 
 pub use font::load_platform_font;
 pub use layer::{

@@ -63,6 +63,7 @@ pub(crate) struct OverlayWindowState {
     /// the options being plumbed through every caller.
     pub(crate) always_on_top: bool,
     pub(crate) close_requested: bool,
+    pub(crate) presentation_invalidated: bool,
     pub(crate) last_bounds: Option<OverlayWindowBounds>,
     /// Client geometry before the first native sizing step. A caption move
     /// never sets this, even when crossing a display changes the window DPI.
@@ -73,7 +74,8 @@ pub(crate) struct OverlayWindowState {
     /// claims the click that lands on it; the window keeps every other click.
     pub(crate) plugin_targets: OverlayPluginTargets,
     /// Where a click on a plugin's control is reported.
-    pub(crate) plugin_interaction_sender: Option<SyncSender<OverlayPluginInteraction>>,
+    pub(crate) plugin_interaction_sender:
+        Option<bongocat_plugin_hud::WakingSender<OverlayPluginInteraction>>,
     pub(crate) sizing: WindowSizing,
     pub(crate) drag: Option<ResizeDrag>,
 }
@@ -151,6 +153,12 @@ impl OverlayWindow {
             // window, so only the transparent bit changes here.
             extended |= WS_EX_TRANSPARENT;
         }
+        if options.always_on_top {
+            // Establish the requested band while the HWND is still hidden;
+            // the initial geometry update must not be the only place that
+            // establishes this style before the first ShowWindow.
+            extended |= WS_EX_TOPMOST;
+        }
         let scale = options.scale_percent;
         let (logical_width, logical_height) = sizing.dimensions_for_scale(96, scale);
         let cursor = current_cursor_position();
@@ -160,6 +168,7 @@ impl OverlayWindow {
             window_mode: options.window_mode,
             always_on_top: options.always_on_top,
             close_requested: false,
+            presentation_invalidated: true,
             last_bounds: None,
             resize_start_bounds: None,
             context_menu_sender,
@@ -267,6 +276,9 @@ impl OverlayWindow {
         };
         if !unsafe { IsWindowVisible(self.hwnd) }.as_bool() {
             return Err(OverlayError::new("Win32 overlay did not become visible"));
+        }
+        if self._state.always_on_top && !self.is_topmost() {
+            self.apply_z_order(HWND_TOPMOST)?;
         }
         Ok(())
     }

@@ -4,6 +4,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
+pub mod v2;
+
+pub fn supports_protocol(version: u32) -> bool {
+    matches!(version, 1 | 2)
+}
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
@@ -731,6 +736,11 @@ pub enum HostMessage {
         config: Configuration,
         state: Vec<u8>,
     },
+    Restore {
+        config: Configuration,
+        state: Vec<u8>,
+        schema_version: u32,
+    },
     Tick {
         elapsed_ms: u64,
     },
@@ -795,12 +805,16 @@ pub enum HostMessage {
     Resume,
     Stop,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PluginOutput {
     pub model: PluginView,
     pub settings: PluginView,
     pub config: Configuration,
     pub state: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub state_schema_version: u32,
+    #[serde(skip)]
+    pub checkpoint_revision: u64,
     /// Current user-facing failures, not view nodes or persisted session data.
     /// Stable ids let the host notify once until recovery, even across locale changes.
     pub errors: Vec<PluginError>,
@@ -817,6 +831,10 @@ pub struct PluginOutput {
     /// Recent bubbles, allowed only with [`Capability::HostBubbleV1`].
     #[serde(default)]
     pub bubbles: Vec<PluginBubble>,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// How many companion menu entries one plugin may publish.
@@ -974,7 +992,8 @@ pub fn read_frame<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> io:
     }
     let mut bytes = vec![0; size];
     reader.read_exact(&mut bytes)?;
-    serde_json::from_slice(&bytes).map_err(io::Error::other)
+    serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// Stdout is exclusively framed protocol, never plugin logging.

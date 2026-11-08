@@ -544,7 +544,10 @@ class BuildEntryPointTests(unittest.TestCase):
         source = read(JUSTFILE)
         self.assertIn("cargo run --locked -p bongocat-packaging", source)
 
-        lowered = source.lower()
+        # Selecting the Python launcher is needed by Windows development/test
+        # recipes. Product target and artifact decisions still belong solely
+        # to the packaging crate.
+        lowered = re.sub(r"^python :=[^\n]*", "", source, flags=re.MULTILINE).lower()
         for build_logic in (
             "powershell",
             "hdiutil",

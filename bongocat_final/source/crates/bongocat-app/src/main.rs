@@ -448,11 +448,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     #[cfg(feature = "storage-test-injection")]
     let mut application = if let Some(root) = &run_options.performance_smoke_root {
+        product_shutdown::trace_profile_control("run_seconds", Some(run_options.run_seconds));
         if cfg!(feature = "production")
             || !root.is_absolute()
-            || !(1..=600).contains(&run_options.run_seconds)
+            || !(1..=28800).contains(&run_options.run_seconds)
         {
-            return Err("resource profiling requires a development build, an absolute isolated root and 1..=600 seconds".into());
+            return Err("resource profiling requires a development build, an absolute isolated root and 1..=28800 seconds".into());
         }
         let layout = bongocat_config::StorageLayout::under(
             root,
@@ -1660,6 +1661,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     if system_termination_requested || cx.global::<ProductCoordinator>().main_thread_signals.take_quit_request() {
+                        #[cfg(feature = "storage-test-injection")]
+                        if !frame_shutdown_requested.load(Ordering::Acquire) {
+                            product_shutdown::trace_profile_control(if system_termination_requested { "system_session_end" } else { "worker_quit_request" }, None);
+                        }
                         frame_shutdown_requested.store(true, Ordering::Release);
                     }
                     if frame_shutdown_requested.load(Ordering::Acquire) {
@@ -1736,6 +1741,115 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .detach();
+
+        #[cfg(feature = "storage-test-injection")]
+        if run_options.performance_smoke_enabled() && env::var_os("BONGOCAT_PERF_EXERCISE").is_some() {
+            let exercise_client = settings_client.clone();
+            let exercise_failures = Arc::clone(&run_failures);
+            let restart_plugins = env::var_os("BONGOCAT_PERF_RESTART_PLUGINS").is_some();
+            cx.spawn(async move |cx| {
+                let mut cycle = 0usize;
+                loop {
+                    Timer::after(Duration::from_secs(30)).await;
+                    let result = async {
+                        let snapshot = exercise_client
+                            .read_snapshot()
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let active = snapshot
+                            .active_model
+                            .as_ref()
+                            .ok_or("missing active model")?;
+                        let models: Vec<_> = snapshot
+                            .model_catalog
+                            .entries
+                            .iter()
+                            .filter(|entry| {
+                                entry.origin == SettingsModelOrigin::BuiltIn
+                                    && matches!(
+                                        entry.availability,
+                                        SettingsModelAvailability::Ready { .. }
+                                    )
+                            })
+                            .collect();
+                        if models.len() < 2 {
+                            return Err("missing alternate model".to_owned());
+                        }
+                        let position = models
+                            .iter()
+                            .position(|entry| entry.id == active.id)
+                            .ok_or("missing active preset")?;
+                        let next = models[(position + 1) % models.len()];
+                        let hidden = exercise_client
+                            .set_overlay_visible(
+                                snapshot.config_revision.ok_or("missing revision")?,
+                                false,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let switched = exercise_client
+                            .select_model(
+                                hidden.config_revision.ok_or("missing revision")?,
+                                SettingsModelKey {
+                                    id: next.id.clone(),
+                                    origin: next.origin,
+                                },
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        Timer::after(Duration::from_secs(2)).await;
+                        exercise_client
+                            .set_overlay_visible(
+                                switched.config_revision.ok_or("missing revision")?,
+                                true,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        let plugins = cx
+                            .update(|cx| {
+                                cx.global::<ProductCoordinator>()
+                                    .plugin_service
+                                    .as_ref()
+                                    .map(|service| service.client())
+                            })
+                            .ok_or("missing plugin service")?;
+                        if restart_plugins {
+                            let restart_id = [
+                                "com.bongocat.todo",
+                                "com.bongocat.mail",
+                                "com.bongocat.cyberwork",
+                            ][cycle % 3];
+                            plugins
+                                .set_enabled(restart_id, false)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            plugins
+                                .set_enabled(restart_id, true)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                        }
+                        for (id, action) in [
+                            ("com.bongocat.todo", "open-panel"),
+                            ("com.bongocat.mail", "open-list"),
+                            ("com.bongocat.cyberwork", "open-history"),
+                        ] {
+                            plugins
+                                .action(id, action)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                        }
+                        cycle += 1;
+                        Ok::<(), String>(())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        record_failure(&exercise_failures, format!("performance exercise: {error}"));
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
 
         if run_options.hidden_model_switch_smoke {
             let smoke_client = settings_client.clone();

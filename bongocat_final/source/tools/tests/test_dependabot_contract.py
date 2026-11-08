@@ -49,6 +49,9 @@ def workspace_directories():
     manifests = [ROOT / "Cargo.toml", *sorted(ROOT.glob("*/*/Cargo.toml"))]
     found = []
     for manifest in manifests:
+        # Local diagnostic/build workspaces are never published source inputs.
+        if "target" in manifest.relative_to(ROOT).parts:
+            continue
         if not manifest.is_file():
             continue
         if not re.search(r"^\[workspace\]", read(manifest), re.MULTILINE):

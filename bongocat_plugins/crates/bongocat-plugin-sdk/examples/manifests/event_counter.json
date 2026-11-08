@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "id": "com.example.event-counter",
+    "name": "Event counter",
+    "description": "Runnable protocol v2 SDK example.",
+    "version": "1.0.0",
+    "app_versions": ">=2.5.4",
+    "protocol_version": 2,
+    "entry": "event_counter",
+    "icon": {
+      "type": "emoji",
+      "value": "X"
+    },
+    "capabilities": [
+      "model_ui",
+      "persistent_state",
+      "host_bubble_v1"
+    ],
+    "localizations": {}
+  }
+}

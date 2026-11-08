@@ -3,9 +3,9 @@
     "id": "com.bongocat.cyberwork",
     "name": "Cyber Work",
     "description": "A hover-revealed key/mouse tap counter and gamepad time tracker above your pet, with scaling and usage history.",
-    "version": "0.1.0",
-    "app_versions": ">=2.5.0",
-    "protocol_version": 1,
+    "version": "0.2.1",
+    "app_versions": ">=2.5.4",
+    "protocol_version": 2,
     "entry": "bongocat-cyberwork",
     "icon": {
       "type": "local_image",

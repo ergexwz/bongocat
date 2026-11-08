@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "id": "com.example.companion-hud",
+    "name": "Companion HUD",
+    "description": "Runnable protocol v2 SDK example.",
+    "version": "1.0.0",
+    "app_versions": ">=2.5.4",
+    "protocol_version": 2,
+    "entry": "companion_hud",
+    "icon": {
+      "type": "emoji",
+      "value": "X"
+    },
+    "capabilities": [
+      "model_ui",
+      "persistent_state",
+      "host_bubble_v1",
+      "pet_state_v1"
+    ],
+    "localizations": {}
+  }
+}

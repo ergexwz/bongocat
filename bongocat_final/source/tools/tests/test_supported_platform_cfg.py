@@ -43,7 +43,7 @@ def offenders(root=CRATES):
     lines = []
     for path in sorted(root.rglob("*.rs")):
         for line_number, line, reason in scan_rust_file(path):
-            lines.append(f"{path}:{line_number}: {reason}: {line}")
+            lines.append(f"{path.as_posix()}:{line_number}: {reason}: {line}")
     return lines
 
 
